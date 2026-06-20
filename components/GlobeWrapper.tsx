@@ -14,5 +14,14 @@ const CelestialGlobe = dynamic(() => import('@/components/CelestialGlobe'), {
 })
 
 export default function GlobeWrapper() {
-  return <CelestialGlobe />
+  return (
+    // Promote the globe to its own GPU compositing layer to avoid
+    // paint invalidation from sibling panel overlays.
+    <div
+      className="absolute inset-0"
+      style={{ willChange: 'transform', transform: 'translateZ(0)' }}
+    >
+      <CelestialGlobe />
+    </div>
+  )
 }

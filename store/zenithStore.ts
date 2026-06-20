@@ -7,6 +7,8 @@ interface ZenithState {
   observer: ObserverLocation
   objects: Map<string, CelestialObject>
   zenithObjects: CelestialObject[]
+  /** Highest topocentric altitude among all tracked objects. Computed in upsertObjects. */
+  maxAltitude: number | null
   showZenithCone: boolean
   dataLoading: boolean
   lastError: string | null
@@ -26,6 +28,7 @@ export const useZenithStore = create<ZenithState>()(
     },
     objects: new Map(),
     zenithObjects: [],
+    maxAltitude: null,
     showZenithCone: true,
     dataLoading: false,
     lastError: null,
@@ -42,7 +45,16 @@ export const useZenithStore = create<ZenithState>()(
           })
         }
         const zenithObjects = [...next.values()].filter((o) => o.inZenithWindow)
-        return { objects: next, zenithObjects }
+        // O(n) scan happens once per pipeline tick inside the setter — not in render.
+        let maxAlt = -Infinity
+        for (const o of next.values()) {
+          if (o.topo.altitude > maxAlt) maxAlt = o.topo.altitude
+        }
+        return {
+          objects: next,
+          zenithObjects,
+          maxAltitude: maxAlt > -Infinity ? maxAlt : null,
+        }
       }),
 
     toggleZenithCone: () =>
