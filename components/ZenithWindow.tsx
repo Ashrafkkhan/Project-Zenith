@@ -9,7 +9,17 @@ const CATEGORY_COLOR: Record<string, string> = {
   planet: '#ff8c69',
 }
 
-export default function ZenithWindow() {
+interface ZenithWindowProps {
+  /** Currently selected object id (for pass predictions) — highlights its row. */
+  selectedObjectId?: string | null
+  /** Called when a row is clicked, to drive the pass-prediction panel. */
+  onSelectObject?: (id: string) => void
+}
+
+export default function ZenithWindow({
+  selectedObjectId,
+  onSelectObject,
+}: ZenithWindowProps = {}) {
   const zenithObjects = useZenithStore((s) => s.zenithObjects)
   const showCone = useZenithStore((s) => s.showZenithCone)
   const toggleCone = useZenithStore((s) => s.toggleZenithCone)
@@ -47,16 +57,28 @@ export default function ZenithWindow() {
           zenithObjects.map((obj) => (
             <div
               key={obj.id}
-              className="px-3 py-2.5 border-b border-white/5"
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelectObject?.(obj.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') onSelectObject?.(obj.id)
+              }}
+              className={`px-3 py-2.5 border-b border-white/5 cursor-pointer ${
+                selectedObjectId === obj.id ? 'bg-sky-400/10' : ''
+              }`}
               // Specific transitions instead of `transition: all` to avoid
               // the browser checking every property on mouse events.
               style={{ transition: 'background-color 0.1s ease' }}
               onMouseEnter={(e) => {
-                ;(e.currentTarget as HTMLElement).style.backgroundColor =
-                  'rgba(255,255,255,0.05)'
+                if (selectedObjectId !== obj.id) {
+                  ;(e.currentTarget as HTMLElement).style.backgroundColor =
+                    'rgba(255,255,255,0.05)'
+                }
               }}
               onMouseLeave={(e) => {
-                ;(e.currentTarget as HTMLElement).style.backgroundColor = ''
+                if (selectedObjectId !== obj.id) {
+                  ;(e.currentTarget as HTMLElement).style.backgroundColor = ''
+                }
               }}
             >
               <div className="flex items-center justify-between">

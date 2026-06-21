@@ -13,6 +13,7 @@ interface ZenithState {
   dataLoading: boolean
   lastError: string | null
   upsertObjects: (objs: CelestialObject[]) => void
+  setObserver: (observer: ObserverLocation) => void
   toggleZenithCone: () => void
   setDataLoading: (loading: boolean) => void
   setLastError: (message: string | null) => void
@@ -56,6 +57,12 @@ export const useZenithStore = create<ZenithState>()(
           maxAltitude: maxAlt > -Infinity ? maxAlt : null,
         }
       }),
+
+    // Moving the observer doesn't touch `objects`: the refresh loop reads the
+    // current observer on its next tick and re-derives every topocentric
+    // Alt/Az (and the zenith set), while CelestialGlobe subscribes to `observer`
+    // to redraw the cone + observer marker immediately.
+    setObserver: (observer) => set({ observer }),
 
     toggleZenithCone: () =>
       set((state) => ({ showZenithCone: !state.showZenithCone })),

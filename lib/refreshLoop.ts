@@ -1,6 +1,8 @@
-import type { CelestialObject } from '@/types/celestial'
+import { ZENITH_WINDOW, isISSName } from '@/types/celestial'
+import type { CelestialObject, GeoPosition } from '@/types/celestial'
 import type { ZenithStore } from '@/store/zenithStore'
 import type { TLEEntry, TleMessage, TickMessage, WorkerOutMessage } from './sgp4Worker'
+import { geodeticToTopocentric } from './coordTransforms'
 
 const DEFAULT_INTERVAL_MS = 10_000
 
@@ -100,6 +102,132 @@ async function getTLEs(): Promise<TLEEntry[]> {
   }
 }
 
+/** Live ISS position shape returned by our /api/iss route (OpenNotify-fed). */
+interface ISSLivePosition {
+  latitude: number
+  longitude: number
+  altitudeKm: number
+  timestampMs: number
+}
+
+/**
+ * Promote the ISS within a freshly-propagated catalogue: force its category to
+ * 'iss' (so the marker renders at #ffcc02), then overlay the live OpenNotify
+ * position from /api/iss — which is NASA-fed and more accurate than our SGP4
+ * propagation. Topocentric Alt/Az and the Zenith-Window flag are recomputed from
+ * the live position before the store update.
+ *
+ * Best-effort: if /api/iss fails (or the ISS isn't in the catalogue), the SGP4
+ * position is kept and a warning logged. The ISS object is never dropped.
+ *
+ * Mutates `objects` in place and resolves with it for convenience.
+ */
+async function promoteISS(
+  objects: CelestialObject[],
+  observer: { latitude: number; longitude: number; altitudeM: number }
+): Promise<CelestialObject[]> {
+  // Same matcher the worker categorises with, so we promote exactly the object
+  // it tagged 'iss' — no second ISS, no mismatch.
+  const iss = objects.find((o) => isISSName(o.name))
+  if (!iss) return objects
+
+  // Promote the category regardless of whether the live overlay succeeds.
+  iss.category = 'iss'
+
+  try {
+    const res = await fetch('/api/iss')
+    if (!res.ok) throw new Error(`/api/iss responded ${res.status}`)
+    const live = (await res.json()) as ISSLivePosition
+    if (
+      !Number.isFinite(live.latitude) ||
+      !Number.isFinite(live.longitude) ||
+      !Number.isFinite(live.altitudeKm)
+    ) {
+      throw new Error('/api/iss returned a malformed position')
+    }
+
+    const geo: GeoPosition = {
+      latitude: live.latitude,
+      longitude: live.longitude,
+      heightKm: live.altitudeKm,
+    }
+    const observerGeo: GeoPosition = {
+      latitude: observer.latitude,
+      longitude: observer.longitude,
+      heightKm: observer.altitudeM / 1000,
+    }
+    const topo = geodeticToTopocentric(observerGeo, geo)
+
+    iss.geo = geo
+    // Hold steady at the live position rather than letting Cesium interpolate
+    // toward the now-inconsistent SGP4 forecast point.
+    iss.geoNext = geo
+    iss.topo = topo
+    iss.inZenithWindow =
+      topo.altitude >= ZENITH_WINDOW.minAlt && topo.altitude <= ZENITH_WINDOW.maxAlt
+    iss.updatedAt = live.timestampMs || Date.now()
+  } catch (err) {
+    console.warn('[refreshLoop] live ISS position unavailable, keeping SGP4:', err)
+  }
+
+  return objects
+}
+
+/** Planet entry shape returned by our /api/planets route (NASA Horizons-fed). */
+interface PlanetApiObject {
+  id: string
+  name: string
+  category: 'planet'
+  geoPosition: GeoPosition
+}
+
+/**
+ * Fetch the current planet positions from /api/planets and turn each into a
+ * CelestialObject, computing topocentric Alt/Az against `observer` and the
+ * Zenith-Window flag from the API's geodetic position.
+ *
+ * Best-effort: a 503 (Horizons unreachable, no cache) or any other failure
+ * logs a warning and returns [] so planets are simply skipped this tick — the
+ * pipeline never crashes.
+ */
+async function fetchPlanetObjects(
+  observer: { latitude: number; longitude: number; altitudeM: number },
+  now: number
+): Promise<CelestialObject[]> {
+  try {
+    const res = await fetch('/api/planets')
+    if (!res.ok) {
+      console.warn(`[refreshLoop] /api/planets responded ${res.status} — skipping planets this tick`)
+      return []
+    }
+    const planets = (await res.json()) as PlanetApiObject[]
+    if (!Array.isArray(planets)) return []
+
+    const observerGeo: GeoPosition = {
+      latitude: observer.latitude,
+      longitude: observer.longitude,
+      heightKm: observer.altitudeM / 1000,
+    }
+
+    return planets.map((p) => {
+      const topo = geodeticToTopocentric(observerGeo, p.geoPosition)
+      return {
+        id: `planet-${p.name.toLowerCase()}`,
+        name: p.name,
+        category: 'planet' as const,
+        geo: p.geoPosition,
+        topo,
+        inZenithWindow:
+          topo.altitude >= ZENITH_WINDOW.minAlt && topo.altitude <= ZENITH_WINDOW.maxAlt,
+        updatedAt: now,
+      }
+    })
+  } catch (err) {
+    console.warn('[refreshLoop] planet fetch failed, skipping planets this tick:', err)
+    return []
+  }
+}
+
 /**
  * Ask the worker to propagate its currently-loaded TLEs for `observer` and
  * resolve with the propagated CelestialObject[]. Rejects if the worker errors.
@@ -192,6 +320,16 @@ export function startRefreshLoop(
         intervalMs
       )
       if (stopped) return
+
+      // 2b. Overlay the ISS with its live OpenNotify position (best-effort) and
+      // ensure it's categorised 'iss'. Never drops the ISS on failure.
+      await promoteISS(updatedObjects, observer)
+      if (stopped) return
+
+      // 2c. Append planets from NASA Horizons (best-effort — skipped on failure).
+      const planets = await fetchPlanetObjects(observer, Date.now())
+      if (stopped) return
+      updatedObjects.push(...planets)
 
       // 3. Push the new positions into the store.
       upsertObjects(updatedObjects)

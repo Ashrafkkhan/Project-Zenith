@@ -69,8 +69,9 @@ from last successful fetch stored in a module-level cache object in lib/
 
 ## Day-by-day sprint
 - D1 ✓ Scaffold + CesiumJS globe + Zustand store + dev seed
-- D2 → Data pipeline (CelesTrak TLEs + satellite.js + Alt/Az)
-- D3 → Zenith Window cone + real-time object markers
+- D2 ✓ Data pipeline (CelesTrak TLEs + satellite.js + Alt/Az; SGP4 in a Web Worker)
+- D3 ✓ Zenith Window cone + real-time object markers (category colours, in-place
+       marker diffing, observer-reactive cone, 2h localStorage TLE cache)
 - D4 → ISS (OpenNotify) + Planets (NASA Horizons) integration
 - D5 → UI panels: observer picker, pass predictions, object detail
 - D6 → Polish: animations, loading states, mobile layout

@@ -1,8 +1,11 @@
 'use client'
 
+import { useState } from 'react'
 import { useZenithStore } from '@/store/zenithStore'
+import ObserverPicker from '@/components/ObserverPicker'
 
 export default function TopBar() {
+  const [pickerOpen, setPickerOpen] = useState(false)
   const observer = useZenithStore((s) => s.observer)
   const zenithCount = useZenithStore((s) => s.zenithObjects.length)
   const trackedCount = useZenithStore((s) => s.objects.size)
@@ -13,6 +16,7 @@ export default function TopBar() {
   const lastError = useZenithStore((s) => s.lastError)
 
   return (
+    <>
     <div className="flex items-center justify-between px-4 py-2 bg-black/80 backdrop-blur border-b border-sky-400/10 text-white shrink-0 z-10">
       <div className="flex items-center gap-3">
         <span className="text-sky-400 font-bold text-lg tracking-tight">✦ Zenith</span>
@@ -20,13 +24,18 @@ export default function TopBar() {
       </div>
 
       <div className="flex items-center gap-4 text-sm">
-        <span className="text-zinc-400">
-          <span className="text-zinc-500">Observer: </span>
-          <span className="text-white font-medium">{observer.label}</span>
-          <span className="text-zinc-600 ml-1.5">
+        <button
+          onClick={() => setPickerOpen((o) => !o)}
+          aria-expanded={pickerOpen}
+          title="Change observer location"
+          className="flex items-center gap-1.5 rounded-md border border-sky-400/20 bg-sky-400/5 px-2 py-1 hover:border-sky-400/40 hover:bg-sky-400/10"
+          style={{ transition: 'background-color 0.15s ease, border-color 0.15s ease' }}
+        >
+          <span className="text-white font-medium">📍 {observer.label}</span>
+          <span className="text-zinc-500 tabular-nums hidden sm:inline">
             {observer.latitude.toFixed(4)}°N {observer.longitude.toFixed(4)}°E
           </span>
-        </span>
+        </button>
 
         {zenithCount > 0 && (
           <span className="bg-sky-400/15 text-sky-400 border border-sky-400/30 px-2 py-0.5 rounded text-xs font-medium">
@@ -59,5 +68,8 @@ export default function TopBar() {
         )}
       </div>
     </div>
+
+    <ObserverPicker open={pickerOpen} onClose={() => setPickerOpen(false)} />
+    </>
   )
 }
