@@ -1,20 +1,18 @@
 import { NextResponse } from 'next/server'
 
 // All CelesTrak fetches go through this server route (never the browser) to
-// avoid CORS. CelesTrak deprecated the legacy /pub/TLE/*.txt files (they now
-// return HTTP 403); the GP endpoint serves the identical 3-line TLE text.
-//   stations → ISS + crewed vehicles
-//   visual   → brightest ~100 satellites
-//   starlink → SpaceX Starlink constellation (~10k satellites)
-//   oneweb   → OneWeb constellation (~100 satellites)
+// avoid CORS. We use the single stable GP "active" group — the full catalogue of
+// on-orbit objects — instead of fetching several groups in parallel, which was
+// tripping CelesTrak's rate limit and returning 502s. (FORMAT=tle, not json, so
+// the propagation pipeline's twoline2satrec keeps working unchanged.)
 const SOURCES = [
-  'https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle',
-  'https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle',
-  'https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle',
-  'https://celestrak.org/NORAD/elements/gp.php?GROUP=oneweb&FORMAT=tle',
+  'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle',
 ]
 
-const CACHE_TTL_MS = 5 * 60 * 1000
+// 2-hour TTL — CelesTrak refreshes element sets a few times a day, so polling
+// more often than this just risks the rate limit. The client (refreshLoop) also
+// caches in localStorage, so CelesTrak is hit at most once per cycle.
+const CACHE_TTL_MS = 2 * 60 * 60 * 1000
 
 export const dynamic = 'force-dynamic'
 

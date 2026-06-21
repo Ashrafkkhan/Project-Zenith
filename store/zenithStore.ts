@@ -12,8 +12,15 @@ interface ZenithState {
   showZenithCone: boolean
   dataLoading: boolean
   lastError: string | null
+  /** Id of the object whose detail panel is open, or null when none is selected. */
+  selectedObjectId: string | null
+  /** Time Machine offset in hours added to the propagation timestamp (0 = now). */
+  offsetHours: number
   upsertObjects: (objs: CelestialObject[]) => void
+  setObserver: (observer: ObserverLocation) => void
+  setSelectedObjectId: (id: string | null) => void
   toggleZenithCone: () => void
+  offsetTimeHours: (hours: number) => void
   setDataLoading: (loading: boolean) => void
   setLastError: (message: string | null) => void
 }
@@ -32,6 +39,8 @@ export const useZenithStore = create<ZenithState>()(
     showZenithCone: true,
     dataLoading: false,
     lastError: null,
+    selectedObjectId: null,
+    offsetHours: 0,
 
     upsertObjects: (objs) =>
       set((state) => {
@@ -57,8 +66,20 @@ export const useZenithStore = create<ZenithState>()(
         }
       }),
 
+    // Moving the observer doesn't touch `objects`: the refresh loop reads the
+    // current observer on its next tick and re-derives every topocentric
+    // Alt/Az (and the zenith set), while CelestialGlobe subscribes to `observer`
+    // to redraw the cone + observer marker immediately.
+    setObserver: (observer) => set({ observer }),
+
+    setSelectedObjectId: (selectedObjectId) => set({ selectedObjectId }),
+
     toggleZenithCone: () =>
       set((state) => ({ showZenithCone: !state.showZenithCone })),
+
+    // Time Machine: the refresh loop reads offsetHours each tick and shifts the
+    // SGP4 propagation timestamp forward by that many hours (0 = live).
+    offsetTimeHours: (hours) => set({ offsetHours: hours }),
 
     setDataLoading: (loading) => set({ dataLoading: loading }),
 

@@ -27,3 +27,38 @@ body {
 .cesium-widget canvas {
   display: block;
 }
+
+/* ── Zenith Score waveform (ZenithScoreWidget) ─────────────────────────────── */
+@keyframes zenithWave {
+  0%, 100% { height: 3px; opacity: 0.3; }
+  50% { height: 18px; opacity: 1; }
+}
+.zenith-wave-bar { animation: zenithWave 1.4s ease-in-out infinite; }
+
+/* ── Zenith list item entry (ZenithWindow rows) ────────────────────────────── */
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateX(10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.zenith-list-item { animation: fadeSlideIn 0.25s ease-out forwards; }
+
+/* ── "IN ZENITH WINDOW" badge glow pulse (ObjectDetailPanel) ───────────────── */
+@keyframes zenithBadgePulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(6, 182, 212, 0.6); }
+  50% { box-shadow: 0 0 14px rgba(6, 182, 212, 1); }
+}
+.zenith-badge-glow { animation: zenithBadgePulse 2s ease-in-out infinite; }
+
+/* ── Radar sonar ping (RadarOverlay) ───────────────────────────────────────── */
+@keyframes radarPulse {
+  0% { r: 40%; opacity: 0.6; }
+  100% { r: 50%; opacity: 0; }
+}
+.radar-pulse { animation: radarPulse 2.5s ease-out infinite; }
+
+/* ── Page-level cosmic entry (page.tsx UI wrapper) ─────────────────────────── */
+@keyframes cosmicFadeIn {
+  from { opacity: 0; transform: scale(0.99); }
+  to { opacity: 1; transform: scale(1); }
+}
+.cosmic-fade-in { animation: cosmicFadeIn 0.8s ease-out forwards; }

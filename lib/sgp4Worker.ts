@@ -10,56 +10,77 @@
 import * as satellite from 'satellite.js'
 import { parseTLE, propagate } from './tleParser'
 import { eciToEcef, ecefToGeodetic, geodeticToTopocentric } from './coordTransforms'
-import { ZENITH_WINDOW } from '../types/celestial'
+import { computePassPredictions } from './passPredictions'
+import type { PassEvent } from './passPredictions'
+import { ZENITH_WINDOW, isISSName } from '../types/celestial'
 import type { CelestialCategory, CelestialObject, GeoPosition } from '../types/celestial'
 
-interface TLEEntry {
+export interface TLEEntry {
   name: string
   line1: string
   line2: string
 }
 
+/** Push fresh TLEs into the worker (sent by refreshLoop when its cache refreshes). */
+export interface TleMessage {
+  type: 'tle'
+  satellites: TLEEntry[]
+}
+
+/** Ask the worker to propagate its stored TLEs for `observer` at the current time. */
 export interface TickMessage {
   type: 'tick'
   observer: { latitude: number; longitude: number; altitudeM: number }
   /** Pipeline cadence in ms — used to compute geoNext for smooth interpolation. */
   intervalMs: number
+  /** Time Machine offset in ms added to the propagation timestamp (0 = now). */
+  offsetMs?: number
 }
+
+/** Ask the worker to predict visible passes for one object over the observer. */
+export interface PredictPassesMessage {
+  type: 'PREDICT_PASSES'
+  /** Caller-supplied request id, echoed back so stale responses can be ignored. */
+  id: string
+  tle1: string
+  tle2: string
+  observerLat: number
+  observerLng: number
+  observerAltM: number
+  hoursAhead: number
+}
+
+export type WorkerInMessage = TleMessage | TickMessage | PredictPassesMessage
 
 export type WorkerOutMessage =
   | { type: 'result'; objects: CelestialObject[] }
   | { type: 'error'; message: string }
   | { type: 'loading'; value: boolean }
+  | { type: 'PASS_PREDICTIONS'; id: string; passes: PassEvent[] }
 
-// Stale-while-revalidate TLE cache inside the worker.
-let cachedSatellites: TLEEntry[] = []
-let cacheExpiry = 0
-
-async function fetchTLEs(): Promise<TLEEntry[]> {
-  const now = Date.now()
-  if (cachedSatellites.length > 0 && now < cacheExpiry) return cachedSatellites
-  const res = await fetch('/api/tle')
-  if (!res.ok) throw new Error(`TLE API responded ${res.status}`)
-  const data = await res.json()
-  if (data.error) throw new Error(data.error)
-  cachedSatellites = data.satellites as TLEEntry[]
-  cacheExpiry = now + 5 * 60 * 1000
-  return cachedSatellites
-}
+// TLEs are fetched + cached on the main thread (refreshLoop owns that so it can
+// use localStorage and survive CelesTrak rate limits). They're pushed in here via
+// a 'tle' message and held so each 'tick' only propagates — the worker performs
+// no network I/O, so the 502 path never reaches it.
+let satellites: TLEEntry[] = []
 
 function categorize(name: string): CelestialCategory {
-  const upper = name.toUpperCase()
-  return upper.includes('ISS') || upper.includes('ZARYA') ? 'iss' : 'satellite'
+  // Narrow ISS match (shared with the refresh loop) so substring names like
+  // SWISSCUBE aren't miscoloured as the station — see ISS_NAME_PATTERN.
+  return isISSName(name) ? 'iss' : 'satellite'
 }
 
-async function processTick(
+function processTick(
   observer: { latitude: number; longitude: number; altitudeM: number },
-  intervalMs: number
-): Promise<void> {
+  intervalMs: number,
+  offsetMs: number
+): void {
   self.postMessage({ type: 'loading', value: true } satisfies WorkerOutMessage)
   try {
-    const tles = await fetchTLEs()
-    const now = new Date()
+    const tles = satellites
+    if (tles.length === 0) throw new Error('No TLE data loaded yet')
+    // Time Machine: shift the propagation epoch forward by offsetMs.
+    const now = new Date(Date.now() + offsetMs)
     const nowNext = new Date(now.getTime() + intervalMs)
     const gmst = satellite.gstime(now)
     const gmstNext = satellite.gstime(nowNext)
@@ -93,6 +114,8 @@ async function processTick(
         id: satrec.satnum,
         name: sat.name,
         category: categorize(sat.name),
+        line1: sat.line1,
+        line2: sat.line2,
         geo,
         geoNext,
         topo,
@@ -113,8 +136,39 @@ async function processTick(
   }
 }
 
-self.addEventListener('message', (e: MessageEvent<TickMessage>) => {
-  if (e.data.type === 'tick') {
-    void processTick(e.data.observer, e.data.intervalMs)
+async function processPredictPasses(msg: PredictPassesMessage): Promise<void> {
+  try {
+    const passes = await computePassPredictions(
+      msg.tle1,
+      msg.tle2,
+      {
+        latitude: msg.observerLat,
+        longitude: msg.observerLng,
+        altitudeM: msg.observerAltM,
+        label: '',
+      },
+      msg.hoursAhead
+    )
+    self.postMessage({
+      type: 'PASS_PREDICTIONS',
+      id: msg.id,
+      passes,
+    } satisfies WorkerOutMessage)
+  } catch (err) {
+    self.postMessage({
+      type: 'error',
+      message: err instanceof Error ? err.message : String(err),
+    } satisfies WorkerOutMessage)
+  }
+}
+
+self.addEventListener('message', (e: MessageEvent<WorkerInMessage>) => {
+  const msg = e.data
+  if (msg.type === 'tle') {
+    satellites = msg.satellites
+  } else if (msg.type === 'tick') {
+    processTick(msg.observer, msg.intervalMs, msg.offsetMs ?? 0)
+  } else if (msg.type === 'PREDICT_PASSES') {
+    void processPredictPasses(msg)
   }
 })
