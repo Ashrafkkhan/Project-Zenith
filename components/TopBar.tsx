@@ -6,11 +6,9 @@ export default function TopBar() {
   const observer = useZenithStore((s) => s.observer)
   const zenithCount = useZenithStore((s) => s.zenithObjects.length)
   const trackedCount = useZenithStore((s) => s.objects.size)
-  const maxAltitude = useZenithStore((s) =>
-    s.objects.size > 0
-      ? Math.max(...Array.from(s.objects.values()).map((o) => o.topo.altitude))
-      : null
-  )
+  // maxAltitude is computed once per pipeline tick inside upsertObjects —
+  // no O(n) work here in the render path.
+  const maxAltitude = useZenithStore((s) => s.maxAltitude)
   const dataLoading = useZenithStore((s) => s.dataLoading)
   const lastError = useZenithStore((s) => s.lastError)
 

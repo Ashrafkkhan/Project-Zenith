@@ -25,13 +25,18 @@ export default function ZenithWindow() {
         </div>
         <button
           onClick={toggleCone}
-          className="text-xs text-zinc-400 hover:text-sky-300 transition-colors"
+          // Use specific property transitions — `transition: all` forces the browser
+          // to check every property on every frame.
+          className="text-xs text-zinc-400 hover:text-sky-300"
+          style={{ transition: 'color 0.15s ease' }}
         >
           {showCone ? 'Hide' : 'Show'} cone
         </button>
       </div>
 
-      <div className="max-h-72 overflow-y-auto">
+      {/* content-visibility: auto skips rendering off-screen list items
+          entirely, which helps when the list is long. */}
+      <div className="max-h-72 overflow-y-auto" style={{ contentVisibility: 'auto' }}>
         {zenithObjects.length === 0 ? (
           <p className="px-3 py-5 text-zinc-600 text-center text-xs">
             No objects overhead
@@ -42,7 +47,17 @@ export default function ZenithWindow() {
           zenithObjects.map((obj) => (
             <div
               key={obj.id}
-              className="px-3 py-2.5 border-b border-white/5 hover:bg-white/5 transition-colors"
+              className="px-3 py-2.5 border-b border-white/5"
+              // Specific transitions instead of `transition: all` to avoid
+              // the browser checking every property on mouse events.
+              style={{ transition: 'background-color 0.1s ease' }}
+              onMouseEnter={(e) => {
+                ;(e.currentTarget as HTMLElement).style.backgroundColor =
+                  'rgba(255,255,255,0.05)'
+              }}
+              onMouseLeave={(e) => {
+                ;(e.currentTarget as HTMLElement).style.backgroundColor = ''
+              }}
             >
               <div className="flex items-center justify-between">
                 <span className="font-medium text-white">{obj.name}</span>

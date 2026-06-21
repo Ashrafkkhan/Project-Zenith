@@ -5,6 +5,7 @@ import TopBar from '@/components/TopBar'
 import ZenithWindow from '@/components/ZenithWindow'
 import DevSeedButton from '@/components/DevSeedButton'
 import GlobeWrapper from '@/components/GlobeWrapper'
+import RadarOverlay from '@/components/RadarOverlay'
 import { startPipeline } from '@/lib/pipelineWorker'
 
 export default function Home() {
@@ -26,6 +27,7 @@ export default function Home() {
       <TopBar />
       <div className="relative flex-1 overflow-hidden">
         <GlobeWrapper />
+        <RadarOverlay />
         <ZenithWindow />
         {showDev && <DevSeedButton />}
       </div>

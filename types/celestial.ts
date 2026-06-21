@@ -26,6 +26,8 @@ export interface CelestialObject {
   name: string
   category: CelestialCategory
   geo: GeoPosition
+  /** Position at updatedAt + pipeline interval — used by the globe for smooth interpolation. */
+  geoNext?: GeoPosition
   topo: TopocentricPosition
   inZenithWindow: boolean
   updatedAt: number

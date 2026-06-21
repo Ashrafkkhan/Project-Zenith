@@ -17,3 +17,13 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/*
+ * The Cesium canvas is the heaviest paint surface on the page.
+ * translateZ(0) promotes it to its own GPU compositing layer so browser
+ * repaints from overlaid panels (ZenithWindow, TopBar) don't invalidate it.
+ * will-change is set narrowly — only on the wrapper that actually transforms.
+ */
+.cesium-widget canvas {
+  display: block;
+}
