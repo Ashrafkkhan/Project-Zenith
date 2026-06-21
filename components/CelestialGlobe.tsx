@@ -145,6 +145,8 @@ export default function CelestialGlobe() {
     let viewer: any = null
     let cancelled = false
     const entityCache = new Map<string, EntityCacheEntry>()
+    const pointCache = new Map<string, any>()
+    let pointCollection: any = null
     // rAF handle so we never queue more than one sync per frame.
     let pendingSyncRaf = 0
 
@@ -179,8 +181,8 @@ export default function CelestialGlobe() {
 
       if (cancelled) { viewer.isDestroyed() || viewer.destroy(); return }
 
-      // Cap at 1.5× — a 2× retina device would otherwise render at 4× the pixels.
-      viewer.resolutionScale = Math.min(window.devicePixelRatio ?? 1, 1.5)
+      // Cap at 1.0× to significantly reduce pixel rendering load on high-DPI / 4K displays.
+      viewer.resolutionScale = Math.min(window.devicePixelRatio ?? 1, 1.0)
 
       if (process.env.NODE_ENV === 'development') {
         viewer.scene.debugShowFramesPerSecond = true
@@ -207,12 +209,15 @@ export default function CelestialGlobe() {
 
       if (cancelled || viewer.isDestroyed()) return
 
+      pointCollection = new Cesium.PointPrimitiveCollection()
+      viewer.scene.primitives.add(pointCollection)
+
       // ── Globe ────────────────────────────────────────────────────────────────
       viewer.scene.globe.show = true
       viewer.scene.globe.baseColor = Cesium.Color.BLACK
-      // Back to default 2.0 — 1.5 loads noticeably more tiles without a visible quality gain
-      // at 22 Mm altitude.
-      viewer.scene.globe.maximumScreenSpaceError = 2.0
+      // Increase from 2.0 to 4.0 to reduce the number of terrain/imagery tiles loaded,
+      // dramatically improving panning and rotation performance.
+      viewer.scene.globe.maximumScreenSpaceError = 4.0
       viewer.scene.globe.depthTestAgainstTerrain = false
 
       // ── Atmosphere & lighting ─────────────────────────────────────────────────
@@ -261,7 +266,7 @@ export default function CelestialGlobe() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (movement: any) => {
           const picked = viewer.scene.pick(movement.position)
-          const id: unknown = picked?.id?.id
+          const id: unknown = picked?.id?.id || picked?.id
           const objects = useZenithStore.getState().objects
           useZenithStore
             .getState()
@@ -415,8 +420,7 @@ export default function CelestialGlobe() {
       const syncObjectMarkers = (objects: Map<string, CelestialObject>) => {
         if (!viewer || viewer.isDestroyed()) return
 
-        // Remove stale entities using entityCache (O(cache size)) instead of
-        // iterating viewer.entities.values (O(Cesium entity count)).
+        // 1. Remove stale entities from entities and pointCollection
         for (const id of entityCache.keys()) {
           if (!objects.has(id)) {
             viewer.entities.removeById(id)
@@ -424,124 +428,170 @@ export default function CelestialGlobe() {
             removeTrail(id)
           }
         }
+        for (const [id, pt] of pointCache.entries()) {
+          if (!objects.has(id)) {
+            pointCollection.remove(pt)
+            pointCache.delete(id)
+          }
+        }
 
         const nowDate = new Date()
         const t0 = Cesium.JulianDate.fromDate(nowDate)
 
         for (const obj of objects.values()) {
-          const pos0 = Cesium.Cartesian3.fromDegrees(
-            obj.geo.longitude, obj.geo.latitude, obj.geo.heightKm * 1000
-          )
+          const isActive = obj.category === 'planet' || obj.category === 'iss' || obj.inZenithWindow
 
-          if (entityCache.has(obj.id)) {
-            const cache = entityCache.get(obj.id)!
-            cache.tickCount++
+          if (isActive) {
+            // Highlighted zenith objects, ISS, and planets use the full Entity API
+            // so they retain labels, trails, cylinders, and sub-second interpolation.
+            
+            // If the object was previously a background point primitive, remove it.
+            if (pointCache.has(obj.id)) {
+              const pt = pointCache.get(obj.id)
+              pointCollection.remove(pt)
+              pointCache.delete(obj.id)
+            }
 
-            let posProp = cache.posProp
-            // Recycle SampledPositionProperty every N ticks to bound memory.
-            if (cache.tickCount % MAX_SAMPLES_PER_TICK === 0) {
-              posProp = new Cesium.SampledPositionProperty()
+            const pos0 = Cesium.Cartesian3.fromDegrees(
+              obj.geo.longitude, obj.geo.latitude, obj.geo.heightKm * 1000
+            )
+
+            if (entityCache.has(obj.id)) {
+              const cache = entityCache.get(obj.id)!
+              cache.tickCount++
+
+              let posProp = cache.posProp
+              // Recycle SampledPositionProperty every N ticks to bound memory.
+              if (cache.tickCount % MAX_SAMPLES_PER_TICK === 0) {
+                posProp = new Cesium.SampledPositionProperty()
+                posProp.setInterpolationOptions({
+                  interpolationDegree: 1,
+                  interpolationAlgorithm: Cesium.LinearApproximation,
+                })
+                posProp.forwardExtrapolationType = Cesium.ExtrapolationType.HOLD
+                posProp.backwardExtrapolationType = Cesium.ExtrapolationType.HOLD
+                const entity = viewer.entities.getById(obj.id)
+                if (entity) entity.position = posProp
+                cache.posProp = posProp
+              }
+
+              posProp.addSample(t0, pos0)
+
+              if (obj.geoNext) {
+                const intervalSec = (obj.updatedAt
+                  ? new Date(obj.updatedAt + 10_000).getTime() - nowDate.getTime()
+                  : 10_000) / 1000
+                // scratchT1 is mutated in place; addSample copies it before we reuse it.
+                Cesium.JulianDate.addSeconds(t0, intervalSec, scratchT1)
+                posProp.addSample(
+                  scratchT1,
+                  Cesium.Cartesian3.fromDegrees(
+                    obj.geoNext.longitude, obj.geoNext.latitude, obj.geoNext.heightKm * 1000
+                  )
+                )
+              }
+
+              if (cache.inZenithWindow !== obj.inZenithWindow) {
+                cache.inZenithWindow = obj.inZenithWindow
+                const entity = viewer.entities.getById(obj.id)
+                if (entity?.point) {
+                  const style = getPointStyle(obj.category, obj.inZenithWindow)
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    ; (entity.point.pixelSize as any).setValue(style.pixelSize)
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    ; (entity.point.outlineWidth as any).setValue(style.outlineWidth)
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    ; (entity.point.color as any).setValue(style.color)
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    ; (entity.point.outlineColor as any).setValue(style.outlineColor)
+                }
+                if (entity?.label) {
+                  const style = getPointStyle(obj.category, obj.inZenithWindow)
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  ; (entity.label.show as any).setValue(style.showLabel)
+                }
+              }
+            } else {
+              const posProp = new Cesium.SampledPositionProperty()
               posProp.setInterpolationOptions({
                 interpolationDegree: 1,
                 interpolationAlgorithm: Cesium.LinearApproximation,
               })
               posProp.forwardExtrapolationType = Cesium.ExtrapolationType.HOLD
               posProp.backwardExtrapolationType = Cesium.ExtrapolationType.HOLD
-              const entity = viewer.entities.getById(obj.id)
-              if (entity) entity.position = posProp
-              cache.posProp = posProp
-            }
+              posProp.addSample(t0, pos0)
 
-            posProp.addSample(t0, pos0)
-
-            if (obj.geoNext) {
-              const intervalSec = (obj.updatedAt
-                ? new Date(obj.updatedAt + 10_000).getTime() - nowDate.getTime()
-                : 10_000) / 1000
-              // scratchT1 is mutated in place; addSample copies it before we reuse it.
-              Cesium.JulianDate.addSeconds(t0, intervalSec, scratchT1)
-              posProp.addSample(
-                scratchT1,
-                Cesium.Cartesian3.fromDegrees(
-                  obj.geoNext.longitude, obj.geoNext.latitude, obj.geoNext.heightKm * 1000
+              if (obj.geoNext) {
+                Cesium.JulianDate.addSeconds(t0, 10, scratchT1)
+                posProp.addSample(
+                  scratchT1,
+                  Cesium.Cartesian3.fromDegrees(
+                    obj.geoNext.longitude, obj.geoNext.latitude, obj.geoNext.heightKm * 1000
+                  )
                 )
-              )
+              }
+
+              const style = getPointStyle(obj.category, obj.inZenithWindow)
+              viewer.entities.add({
+                id: obj.id,
+                name: obj.name,
+                position: posProp,
+                point: {
+                  pixelSize: style.pixelSize,
+                  color: style.color,
+                  outlineColor: style.outlineColor,
+                  outlineWidth: style.outlineWidth,
+                },
+                label: {
+                  text: obj.name,
+                  show: style.showLabel,
+                  font: style.labelFont,
+                  fillColor: style.labelFill,
+                  outlineColor: C!.labelOutline,
+                  outlineWidth: 2,
+                  style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                  verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                  pixelOffset: new Cesium.Cartesian2(0, -10),
+                  eyeOffset: style.eyeOffset,
+                },
+              })
+
+              entityCache.set(obj.id, { posProp, inZenithWindow: obj.inZenithWindow, tickCount: 0 })
             }
 
-            if (cache.inZenithWindow !== obj.inZenithWindow) {
-              cache.inZenithWindow = obj.inZenithWindow
-              const entity = viewer.entities.getById(obj.id)
-              if (entity?.point) {
-                const style = getPointStyle(obj.category, obj.inZenithWindow)
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  ; (entity.point.pixelSize as any).setValue(style.pixelSize)
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  ; (entity.point.outlineWidth as any).setValue(style.outlineWidth)
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  ; (entity.point.color as any).setValue(style.color)
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  ; (entity.point.outlineColor as any).setValue(style.outlineColor)
-              }
-              if (entity?.label) {
-                const style = getPointStyle(obj.category, obj.inZenithWindow)
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ; (entity.label.show as any).setValue(style.showLabel)
-              }
+            // Orbital trail: zenith objects + the ISS get one; planets never do.
+            if (obj.category !== 'planet' && (obj.inZenithWindow || obj.category === 'iss')) {
+              updateTrail(obj)
+            } else {
+              removeTrail(obj.id)
             }
           } else {
-            const posProp = new Cesium.SampledPositionProperty()
-            posProp.setInterpolationOptions({
-              interpolationDegree: 1,
-              interpolationAlgorithm: Cesium.LinearApproximation,
-            })
-            posProp.forwardExtrapolationType = Cesium.ExtrapolationType.HOLD
-            posProp.backwardExtrapolationType = Cesium.ExtrapolationType.HOLD
-            posProp.addSample(t0, pos0)
-
-            if (obj.geoNext) {
-              Cesium.JulianDate.addSeconds(t0, 10, scratchT1)
-              posProp.addSample(
-                scratchT1,
-                Cesium.Cartesian3.fromDegrees(
-                  obj.geoNext.longitude, obj.geoNext.latitude, obj.geoNext.heightKm * 1000
-                )
-              )
+            // Background swarm (non-zenith satellites) are rendered as simple, lightweight
+            // point primitives in a GPU PointPrimitiveCollection to optimize performance.
+            
+            // If the object was previously a full Entity, remove it.
+            if (entityCache.has(obj.id)) {
+              viewer.entities.removeById(obj.id)
+              entityCache.delete(obj.id)
+              removeTrail(obj.id)
             }
 
-            const style = getPointStyle(obj.category, obj.inZenithWindow)
-            viewer.entities.add({
-              id: obj.id,
-              name: obj.name,
-              position: posProp,
-              point: {
-                pixelSize: style.pixelSize,
-                color: style.color,
-                outlineColor: style.outlineColor,
-                outlineWidth: style.outlineWidth,
-              },
-              label: {
-                text: obj.name,
-                show: style.showLabel,
-                font: style.labelFont,
-                fillColor: style.labelFill,
-                outlineColor: C!.labelOutline,
-                outlineWidth: 2,
-                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                pixelOffset: new Cesium.Cartesian2(0, -10),
-                eyeOffset: style.eyeOffset,
-              },
-            })
+            const pos = Cesium.Cartesian3.fromDegrees(
+              obj.geo.longitude, obj.geo.latitude, obj.geo.heightKm * 1000
+            )
 
-            entityCache.set(obj.id, { posProp, inZenithWindow: obj.inZenithWindow, tickCount: 0 })
-          }
-
-          // Orbital trail: zenith objects + the ISS get one; planets never do.
-          // When something leaves the zenith window its trail is torn down.
-          if (obj.category !== 'planet' && (obj.inZenithWindow || obj.category === 'iss')) {
-            updateTrail(obj)
-          } else {
-            removeTrail(obj.id)
+            if (pointCache.has(obj.id)) {
+              const pt = pointCache.get(obj.id)
+              pt.position = pos
+            } else {
+              const pt = pointCollection.add({
+                position: pos,
+                pixelSize: 2,
+                color: C!.cyanFaint,
+                id: obj.id, // Set primitive ID to satellite ID so screen picker selects it on click
+              })
+              pointCache.set(obj.id, pt)
+            }
           }
         }
       }
@@ -569,6 +619,7 @@ export default function CelestialGlobe() {
       if (pendingSyncRaf) { cancelAnimationFrame(pendingSyncRaf); pendingSyncRaf = 0 }
       unsubs.forEach((u) => u())
       entityCache.clear()
+      pointCache.clear()
       trailBuffers.clear()
       if (viewer && !viewer.isDestroyed()) viewer.destroy()
     }

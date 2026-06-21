@@ -9,6 +9,7 @@
 
 import * as satellite from 'satellite.js'
 import { parseTLE, propagate } from './tleParser'
+import type { NamedSatRec } from './tleParser'
 import { eciToEcef, ecefToGeodetic, geodeticToTopocentric } from './coordTransforms'
 import { computePassPredictions } from './passPredictions'
 import type { PassEvent } from './passPredictions'
@@ -62,7 +63,7 @@ export type WorkerOutMessage =
 // use localStorage and survive CelesTrak rate limits). They're pushed in here via
 // a 'tle' message and held so each 'tick' only propagates — the worker performs
 // no network I/O, so the 502 path never reaches it.
-let satellites: TLEEntry[] = []
+let satellites: { entry: TLEEntry; satrec: NamedSatRec }[] = []
 
 function categorize(name: string): CelestialCategory {
   // Narrow ISS match (shared with the refresh loop) so substring names like
@@ -77,8 +78,8 @@ function processTick(
 ): void {
   self.postMessage({ type: 'loading', value: true } satisfies WorkerOutMessage)
   try {
-    const tles = satellites
-    if (tles.length === 0) throw new Error('No TLE data loaded yet')
+    const records = satellites
+    if (records.length === 0) throw new Error('No TLE data loaded yet')
     // Time Machine: shift the propagation epoch forward by offsetMs.
     const now = new Date(Date.now() + offsetMs)
     const nowNext = new Date(now.getTime() + intervalMs)
@@ -92,8 +93,8 @@ function processTick(
     }
 
     const objects: CelestialObject[] = []
-    for (const sat of tles) {
-      const satrec = parseTLE(sat.line1, sat.line2, sat.name)
+    for (const record of records) {
+      const { entry, satrec } = record
 
       const eci = propagate(satrec, now)
       if (!eci) continue
@@ -102,25 +103,32 @@ function processTick(
       const geo = ecefToGeodetic(ecef)
       const topo = geodeticToTopocentric(observerGeo, geo)
 
-      // Propagate one interval ahead for smooth Cesium interpolation.
+      const category = categorize(entry.name)
+      const inZenithWindow =
+        topo.altitude >= ZENITH_WINDOW.minAlt && topo.altitude <= ZENITH_WINDOW.maxAlt
+
+      // Propagate one interval ahead for smooth Cesium interpolation ONLY if the
+      // object is in the zenith window or is the ISS. For other background satellites,
+      // we save propagation cycles since we don't interpolate them sub-second.
       let geoNext: GeoPosition | undefined
-      const eciNext = propagate(satrec, nowNext)
-      if (eciNext) {
-        const ecefNext = eciToEcef(eciNext.positionEci, gmstNext)
-        geoNext = ecefToGeodetic(ecefNext)
+      if (inZenithWindow || category === 'iss') {
+        const eciNext = propagate(satrec, nowNext)
+        if (eciNext) {
+          const ecefNext = eciToEcef(eciNext.positionEci, gmstNext)
+          geoNext = ecefToGeodetic(ecefNext)
+        }
       }
 
       objects.push({
         id: satrec.satnum,
-        name: sat.name,
-        category: categorize(sat.name),
-        line1: sat.line1,
-        line2: sat.line2,
+        name: entry.name,
+        category,
+        line1: entry.line1,
+        line2: entry.line2,
         geo,
         geoNext,
         topo,
-        inZenithWindow:
-          topo.altitude >= ZENITH_WINDOW.minAlt && topo.altitude <= ZENITH_WINDOW.maxAlt,
+        inZenithWindow,
         updatedAt: now.getTime(),
       })
     }
@@ -165,7 +173,10 @@ async function processPredictPasses(msg: PredictPassesMessage): Promise<void> {
 self.addEventListener('message', (e: MessageEvent<WorkerInMessage>) => {
   const msg = e.data
   if (msg.type === 'tle') {
-    satellites = msg.satellites
+    satellites = msg.satellites.map((sat) => ({
+      entry: sat,
+      satrec: parseTLE(sat.line1, sat.line2, sat.name),
+    }))
   } else if (msg.type === 'tick') {
     processTick(msg.observer, msg.intervalMs, msg.offsetMs ?? 0)
   } else if (msg.type === 'PREDICT_PASSES') {

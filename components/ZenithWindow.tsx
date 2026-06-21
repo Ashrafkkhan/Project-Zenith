@@ -80,6 +80,7 @@ function ZenithScoreWidget() {
 function TimeMachine() {
   const offsetHours = useZenithStore((s) => s.offsetHours)
   const offsetTimeHours = useZenithStore((s) => s.offsetTimeHours)
+  const dataLoading = useZenithStore((s) => s.dataLoading)
   // Map the stored hours back to a slider index (defaults to 0/"Now").
   const index = Math.max(0, TIME_OFFSETS.indexOf(offsetHours))
 
@@ -89,11 +90,19 @@ function TimeMachine() {
         <span className="text-[10px] text-cyan-400 font-mono tracking-widest uppercase">
           Time Machine
         </span>
-        {offsetHours !== 0 && (
-          <span className="bg-cyan-500/10 text-cyan-400 text-xs rounded-full px-2">
-            +{offsetHours}h
-          </span>
-        )}
+        <span className="flex items-center gap-1.5">
+          {dataLoading && (
+            <span
+              className="inline-block h-2 w-2 rounded-full border border-cyan-400/40 border-t-cyan-400 animate-spin"
+              aria-label="Computing"
+            />
+          )}
+          {offsetHours !== 0 && (
+            <span className="bg-cyan-500/10 text-cyan-400 text-xs rounded-full px-2">
+              +{offsetHours}h
+            </span>
+          )}
+        </span>
       </div>
       <input
         type="range"
@@ -103,6 +112,7 @@ function TimeMachine() {
         value={index}
         onChange={(e) => offsetTimeHours(TIME_OFFSETS[Number(e.target.value)])}
         className="w-full cursor-pointer accent-cyan-400"
+        style={{ transition: 'opacity 0.15s ease', opacity: dataLoading ? 0.6 : 1 }}
       />
       <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-1">
         <span>Now</span>

@@ -43,22 +43,21 @@ export const useZenithStore = create<ZenithState>()(
     offsetHours: 0,
 
     upsertObjects: (objs) =>
-      set((state) => {
-        const next = new Map(state.objects)
-        for (const obj of objs) {
-          next.set(obj.id, {
-            ...obj,
-            inZenithWindow:
-              obj.topo.altitude >= ZENITH_WINDOW.minAlt &&
-              obj.topo.altitude <= ZENITH_WINDOW.maxAlt,
-          })
-        }
-        const zenithObjects = [...next.values()].filter((o) => o.inZenithWindow)
-        // O(n) scan happens once per pipeline tick inside the setter — not in render.
+      set(() => {
+        const next = new Map()
         let maxAlt = -Infinity
-        for (const o of next.values()) {
-          if (o.topo.altitude > maxAlt) maxAlt = o.topo.altitude
+        const zenithObjects: CelestialObject[] = []
+
+        for (const obj of objs) {
+          next.set(obj.id, obj)
+          if (obj.inZenithWindow) {
+            zenithObjects.push(obj)
+          }
+          if (obj.topo.altitude > maxAlt) {
+            maxAlt = obj.topo.altitude
+          }
         }
+
         return {
           objects: next,
           zenithObjects,

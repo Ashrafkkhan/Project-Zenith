@@ -292,6 +292,9 @@ export function startRefreshLoop(
   let inFlight = false
   // The TLE array reference last sent to the worker — only re-send on change.
   let lastSentTLE: TLEEntry[] | null = null
+  // Debounce handle for Time Machine: fire immediately when offset changes
+  // rather than waiting up to 10s for the next scheduled tick.
+  let timeMachineDebounce: ReturnType<typeof setTimeout> | null = null
 
   const tick = async () => {
     if (stopped || inFlight) return
@@ -349,9 +352,26 @@ export function startRefreshLoop(
   void tick()
   const handle = setInterval(() => void tick(), intervalMs)
 
+  // When the user drags the Time Machine slider, kick off a fresh propagation
+  // immediately (debounced 300ms) so the globe responds without waiting up to
+  // 10 s for the next scheduled tick.
+  const unsubOffset = store.subscribe(
+    (s) => s.offsetHours,
+    () => {
+      if (stopped) return
+      if (timeMachineDebounce) clearTimeout(timeMachineDebounce)
+      timeMachineDebounce = setTimeout(() => {
+        timeMachineDebounce = null
+        void tick()
+      }, 300)
+    }
+  )
+
   return function stopRefreshLoop() {
     stopped = true
     clearInterval(handle)
+    if (timeMachineDebounce) clearTimeout(timeMachineDebounce)
+    unsubOffset()
     worker.terminate()
   }
 }
