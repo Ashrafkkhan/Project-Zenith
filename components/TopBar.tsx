@@ -17,50 +17,50 @@ export default function TopBar() {
 
   return (
     <>
-    <div className="flex items-center justify-between px-4 py-2 bg-black/80 backdrop-blur border-b border-sky-400/10 text-white shrink-0 z-10">
-      <div className="flex items-center gap-3">
-        <span className="text-sky-400 font-bold text-lg tracking-tight">✦ Zenith</span>
-        <span className="text-zinc-500 text-sm hidden sm:inline">The Celestial Eye</span>
+    <div className="flex items-center justify-between px-4 py-2 bg-black/20 backdrop-blur-md border-b border-cyan-500/10 text-white shrink-0 z-10">
+      <div className="flex items-center gap-2">
+        <span className="text-cyan-400 font-bold text-lg tracking-tight">✦ Zenith</span>
+        <span className="text-slate-500 hidden sm:inline">|</span>
+        <span className="text-slate-500 text-sm hidden sm:inline">The Celestial Eye</span>
       </div>
 
-      <div className="flex items-center gap-4 text-sm">
+      <div className="flex items-center gap-3 text-sm">
         <button
           onClick={() => setPickerOpen((o) => !o)}
           aria-expanded={pickerOpen}
           title="Change observer location"
-          className="flex items-center gap-1.5 rounded-md border border-sky-400/20 bg-sky-400/5 px-2 py-1 hover:border-sky-400/40 hover:bg-sky-400/10"
-          style={{ transition: 'background-color 0.15s ease, border-color 0.15s ease' }}
+          className="flex items-center gap-1.5 bg-black/40 backdrop-blur-sm border border-cyan-500/30 rounded-full px-3 py-1 hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all duration-150"
         >
           <span className="text-white font-medium">📍 {observer.label}</span>
-          <span className="text-zinc-500 tabular-nums hidden sm:inline">
+          <span className="text-slate-400 font-mono hidden sm:inline">
             {observer.latitude.toFixed(4)}°N {observer.longitude.toFixed(4)}°E
           </span>
         </button>
 
         {zenithCount > 0 && (
-          <span className="bg-sky-400/15 text-sky-400 border border-sky-400/30 px-2 py-0.5 rounded text-xs font-medium">
+          <span className="bg-black/40 backdrop-blur-sm border border-cyan-500/30 rounded-full px-3 py-1 text-cyan-400 text-xs font-medium">
             {zenithCount} in Zenith Window
           </span>
         )}
 
         {maxAltitude !== null && (
-          <span className="bg-violet-500/15 text-violet-300 border border-violet-400/30 px-2 py-0.5 rounded text-xs font-medium tabular-nums">
+          <span className="bg-black/40 backdrop-blur-sm border border-cyan-500/30 rounded-full px-3 py-1 text-violet-300 text-xs font-medium font-mono">
             ↑ {maxAltitude.toFixed(1)}° max
           </span>
         )}
 
         {lastError ? (
           <span
-            className="text-red-400/90 text-xs max-w-[14rem] truncate"
+            className="bg-red-500/10 text-red-400 border border-red-500/30 rounded-full px-3 py-1 text-xs max-w-[14rem] truncate"
             title={lastError}
           >
             ⚠ {lastError}
           </span>
         ) : (
-          <span className="text-zinc-500 text-xs tabular-nums flex items-center gap-1.5">
+          <span className="bg-black/40 backdrop-blur-sm border border-cyan-500/30 rounded-full px-3 py-1 text-slate-400 text-xs font-mono flex items-center gap-1.5">
             <span
               className={`inline-block h-1.5 w-1.5 rounded-full ${
-                dataLoading ? 'bg-sky-400 animate-pulse' : 'bg-emerald-500/70'
+                dataLoading ? 'bg-cyan-400 animate-pulse' : 'bg-emerald-500/70'
               }`}
             />
             {trackedCount} tracked

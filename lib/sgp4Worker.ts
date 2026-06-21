@@ -33,6 +33,8 @@ export interface TickMessage {
   observer: { latitude: number; longitude: number; altitudeM: number }
   /** Pipeline cadence in ms — used to compute geoNext for smooth interpolation. */
   intervalMs: number
+  /** Time Machine offset in ms added to the propagation timestamp (0 = now). */
+  offsetMs?: number
 }
 
 /** Ask the worker to predict visible passes for one object over the observer. */
@@ -70,13 +72,15 @@ function categorize(name: string): CelestialCategory {
 
 function processTick(
   observer: { latitude: number; longitude: number; altitudeM: number },
-  intervalMs: number
+  intervalMs: number,
+  offsetMs: number
 ): void {
   self.postMessage({ type: 'loading', value: true } satisfies WorkerOutMessage)
   try {
     const tles = satellites
     if (tles.length === 0) throw new Error('No TLE data loaded yet')
-    const now = new Date()
+    // Time Machine: shift the propagation epoch forward by offsetMs.
+    const now = new Date(Date.now() + offsetMs)
     const nowNext = new Date(now.getTime() + intervalMs)
     const gmst = satellite.gstime(now)
     const gmstNext = satellite.gstime(nowNext)
@@ -163,7 +167,7 @@ self.addEventListener('message', (e: MessageEvent<WorkerInMessage>) => {
   if (msg.type === 'tle') {
     satellites = msg.satellites
   } else if (msg.type === 'tick') {
-    processTick(msg.observer, msg.intervalMs)
+    processTick(msg.observer, msg.intervalMs, msg.offsetMs ?? 0)
   } else if (msg.type === 'PREDICT_PASSES') {
     void processPredictPasses(msg)
   }

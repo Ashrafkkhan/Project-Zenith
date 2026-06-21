@@ -2,13 +2,20 @@
 
 import { useEffect, useRef } from 'react'
 import { useZenithStore } from '@/store/zenithStore'
-import type { CelestialObject } from '@/types/celestial'
+import type { CelestialObject, GeoPosition } from '@/types/celestial'
 
 const CONE_LENGTH = 2_000_000
 // Half-angle of 15° represents the 75°–90° zenith shell: an object at 75°
 // elevation sits 15° off the local vertical. radius = length · tan(15°).
 const CONE_RADIUS = Math.round(CONE_LENGTH * Math.tan((15 * Math.PI) / 180))
 const MAX_SAMPLES_PER_TICK = 6
+
+// ── Orbital trail ring buffers ────────────────────────────────────────────────
+// Last N geo positions per tracked (zenith / ISS) object, used to draw a fading
+// glow polyline behind the marker. Module-level so it survives React re-mounts;
+// cleared in the effect cleanup.
+const TRAIL_LENGTH = 8
+const trailBuffers = new Map<string, GeoPosition[]>()
 
 // ── Pre-built Color cache ─────────────────────────────────────────────────────
 // Populated once after Cesium loads so getPointStyle never parses CSS strings
@@ -24,6 +31,16 @@ function buildColorCache(Cesium: any) {
     satFill: Cesium.Color.fromCssColorString('#4fc3f7'),
     issFill: Cesium.Color.fromCssColorString('#ffcc02'),
     planetFill: Cesium.Color.fromCssColorString('#ff8c69'),
+    // Declutter palette — faint cyan for the non-zenith satellite swarm.
+    cyan: Cesium.Color.CYAN,
+    cyanFaint: Cesium.Color.CYAN.withAlpha(0.2),
+    satZenOutline: Cesium.Color.CYAN.withAlpha(0.8),
+    issOutline: Cesium.Color.fromCssColorString('#ffcc02').withAlpha(0.6),
+    planetOutline: Cesium.Color.fromCssColorString('#ff8c69').withAlpha(0.6),
+    // Label eye offsets: push the zenith-sat label toward the camera so it
+    // doesn't z-fight / overlap its own dot.
+    eyeLabel: new Cesium.Cartesian3(0, 0, -10000),
+    eyeZero: Cesium.Cartesian3.ZERO,
     // Subtle white edge so in-zenith points pop against the globe.
     zenOutline: Cesium.Color.WHITE.withAlpha(0.85),
     // Zenith cone.
@@ -40,18 +57,57 @@ function buildColorCache(Cesium: any) {
   }
 }
 
-// Colour strictly by category; size + label strictly by zenith-window state.
+// Per-category styling. ISS and planets are always full-size + labelled; the
+// satellite swarm is decluttered (tiny faint dots) unless it enters the zenith
+// window, where it gets a bright, outlined, labelled treatment.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getPointStyle(category: string, inZenithWindow: boolean): any {
-  const color =
-    category === 'iss' ? C!.issFill :
-      category === 'planet' ? C!.planetFill :
-        C!.satFill
+  if (category === 'iss') {
+    return {
+      pixelSize: 10,
+      color: C!.issFill,
+      outlineColor: C!.issOutline,
+      outlineWidth: 2,
+      showLabel: true,
+      labelFont: '11px monospace',
+      labelFill: C!.issFill,
+      eyeOffset: C!.eyeZero,
+    }
+  }
+  if (category === 'planet') {
+    return {
+      pixelSize: 8,
+      color: C!.planetFill,
+      outlineColor: C!.planetOutline,
+      outlineWidth: 1,
+      showLabel: true,
+      labelFont: '11px monospace',
+      labelFill: C!.planetFill,
+      eyeOffset: C!.eyeZero,
+    }
+  }
+  // satellite
+  if (inZenithWindow) {
+    return {
+      pixelSize: 7,
+      color: C!.satFill,
+      outlineColor: C!.satZenOutline,
+      outlineWidth: 1,
+      showLabel: true,
+      labelFont: '11px Space Mono',
+      labelFill: C!.cyan,
+      eyeOffset: C!.eyeLabel,
+    }
+  }
   return {
-    color,
-    pixelSize: inZenithWindow ? 8 : 4,
-    outlineColor: C!.zenOutline,
-    outlineWidth: inZenithWindow ? 1 : 0,
+    pixelSize: 2,
+    color: C!.cyanFaint,
+    outlineColor: C!.cyanFaint,
+    outlineWidth: 0,
+    showLabel: false,
+    labelFont: '11px Space Mono',
+    labelFill: C!.cyan,
+    eyeOffset: C!.eyeLabel,
   }
 }
 
@@ -174,6 +230,7 @@ export default function CelestialGlobe() {
 
       try {
         viewer.scene.globe.atmosphereLightIntensity = 10.0
+        viewer.scene.globe.atmosphereMieScaleHeight = 20000
         viewer.scene.globe.atmosphereRayleighCoefficient = new Cesium.Cartesian3(
           5.5e-6, 13.0e-6, 28.4e-6
         )
@@ -194,6 +251,27 @@ export default function CelestialGlobe() {
           roll: 0,
         },
       })
+
+      // ── Entity selection ──────────────────────────────────────────────────────
+      // Click a tracked object → open its detail panel via the store. Clicking
+      // empty space (or a non-object entity like the cone/observer marker)
+      // deselects. selectedObjectId is the single source of truth for the panel.
+      const clickHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
+      clickHandler.setInputAction(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (movement: any) => {
+          const picked = viewer.scene.pick(movement.position)
+          const id: unknown = picked?.id?.id
+          const objects = useZenithStore.getState().objects
+          useZenithStore
+            .getState()
+            .setSelectedObjectId(
+              typeof id === 'string' && objects.has(id) ? id : null
+            )
+        },
+        Cesium.ScreenSpaceEventType.LEFT_CLICK
+      )
+      unsubs.push(() => clickHandler.destroy())
 
       // ── Zenith cone ───────────────────────────────────────────────────────────
       // A CylinderGraphics approximating the 75°–90° shell, apex on the observer's
@@ -292,6 +370,45 @@ export default function CelestialGlobe() {
       // Scratch JulianDate reused across ticks — addSample copies before we mutate it again.
       const scratchT1 = new Cesium.JulianDate()
 
+      // ── Orbital trail helpers ──────────────────────────────────────────────────
+      // Drops the `trail-${id}` polyline and its ring buffer for a given object.
+      const removeTrail = (id: string) => {
+        if (trailBuffers.delete(id)) viewer.entities.removeById(`trail-${id}`)
+      }
+
+      // Pushes the object's current geo position into its ring buffer and
+      // creates/updates the glow polyline behind it. ISS glows gold, zenith
+      // satellites glow cyan.
+      const updateTrail = (obj: CelestialObject) => {
+        let buf = trailBuffers.get(obj.id)
+        if (!buf) { buf = []; trailBuffers.set(obj.id, buf) }
+        buf.push(obj.geo)
+        if (buf.length > TRAIL_LENGTH) buf.shift()
+
+        const positions = buf.map((g) =>
+          Cesium.Cartesian3.fromDegrees(g.longitude, g.latitude, g.heightKm * 1000)
+        )
+        const trailId = `trail-${obj.id}`
+        const existing = viewer.entities.getById(trailId)
+        if (existing) {
+          existing.polyline.positions = positions
+        } else {
+          const material = obj.category === 'iss'
+            ? new Cesium.PolylineGlowMaterialProperty({
+              glowPower: 0.2,
+              color: Cesium.Color.fromCssColorString('#ffcc02').withAlpha(0.5),
+            })
+            : new Cesium.PolylineGlowMaterialProperty({
+              glowPower: 0.1,
+              color: Cesium.Color.CYAN.withAlpha(0.3),
+            })
+          viewer.entities.add({
+            id: trailId,
+            polyline: { positions, material, width: 1.5, clampToGround: false },
+          })
+        }
+      }
+
       // ── Delta satellite entity sync ───────────────────────────────────────────
       // Deferred to the next animation frame so the Zustand notify → syncObjectMarkers
       // path never blocks the render thread mid-frame.
@@ -304,6 +421,7 @@ export default function CelestialGlobe() {
           if (!objects.has(id)) {
             viewer.entities.removeById(id)
             entityCache.delete(id)
+            removeTrail(id)
           }
         }
 
@@ -365,8 +483,9 @@ export default function CelestialGlobe() {
                   ; (entity.point.outlineColor as any).setValue(style.outlineColor)
               }
               if (entity?.label) {
+                const style = getPointStyle(obj.category, obj.inZenithWindow)
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ; (entity.label.show as any).setValue(obj.inZenithWindow)
+                ; (entity.label.show as any).setValue(style.showLabel)
               }
             }
           } else {
@@ -402,18 +521,27 @@ export default function CelestialGlobe() {
               },
               label: {
                 text: obj.name,
-                show: obj.inZenithWindow,
-                font: '11px monospace',
-                fillColor: C!.labelFill,
+                show: style.showLabel,
+                font: style.labelFont,
+                fillColor: style.labelFill,
                 outlineColor: C!.labelOutline,
                 outlineWidth: 2,
                 style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                 verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
                 pixelOffset: new Cesium.Cartesian2(0, -10),
+                eyeOffset: style.eyeOffset,
               },
             })
 
             entityCache.set(obj.id, { posProp, inZenithWindow: obj.inZenithWindow, tickCount: 0 })
+          }
+
+          // Orbital trail: zenith objects + the ISS get one; planets never do.
+          // When something leaves the zenith window its trail is torn down.
+          if (obj.category !== 'planet' && (obj.inZenithWindow || obj.category === 'iss')) {
+            updateTrail(obj)
+          } else {
+            removeTrail(obj.id)
           }
         }
       }
@@ -441,6 +569,7 @@ export default function CelestialGlobe() {
       if (pendingSyncRaf) { cancelAnimationFrame(pendingSyncRaf); pendingSyncRaf = 0 }
       unsubs.forEach((u) => u())
       entityCache.clear()
+      trailBuffers.clear()
       if (viewer && !viewer.isDestroyed()) viewer.destroy()
     }
   }, [])

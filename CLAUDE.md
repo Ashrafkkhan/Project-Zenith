@@ -17,23 +17,34 @@ Core innovation: **Zenith Window** — objects at 75°–90° topocentric altitu
 
 ## Project structure
 /app             → Next.js App Router pages + layout
-/components      → React components (CelestialGlobe, ZenithWindow, TopBar, etc.)
+/app/api         → route handlers: tle/ · iss/ · planets/ · geocode/
+/components      → React components (CelestialGlobe, ZenithWindow, TopBar,
+                   ObserverPicker, ObjectDetailPanel, PassPredictionPanel, etc.)
 /store           → zenithStore.ts (Zustand)
 /types           → celestial.ts (TypeScript types)
 /lib             → data pipeline, orbital math, API clients
+                   (refreshLoop, sgp4Worker, coordTransforms, tleParser,
+                    passPredictions, seedDevData)
 /public/_cesium  → Cesium static assets (auto-copied by webpack at build)
 
 ## Key types (types/celestial.ts)
 - CelestialObject — unified type for satellites, ISS, planets
+  (includes optional line1/line2 TLE strings for on-demand pass prediction)
 - TopocentricPosition — { altitude, azimuth, rangekm }
 - GeoPosition — { latitude, longitude, heightKm } (WGS-84 for Cesium)
 - ObserverLocation — { latitude, longitude, altitudeM, label }
+- ISS_NAME_PATTERN / isISSName(name) — shared ISS matcher (worker + refreshLoop)
+  so categorisation and live-position promotion never disagree → single ISS
 
 ## Store shape (store/zenithStore.ts)
 - observer — current user location
 - objects — Map<id, CelestialObject> (full catalogue)
 - zenithObjects — filtered array where inZenithWindow === true
+- selectedObjectId — id of object whose ObjectDetailPanel is open (null = none)
 - upsertObjects(objs[]) — bulk update + auto-recomputes zenithObjects
+- setObserver(loc) — move observer (cone redraws via subscription; topo Alt/Az
+  re-derive on the next pipeline tick)
+- setSelectedObjectId(id) — drives ObjectDetailPanel (set by globe click handler)
 - showZenithCone / toggleZenithCone — cone visibility
 
 ## Zenith Window constants
@@ -59,6 +70,28 @@ inZenithWindow = topo.altitude >= 75 && topo.altitude <= 90
 NASA Horizons fallback: if Horizons API is unreachable, use cached ephemeris
 from last successful fetch stored in a module-level cache object in lib/
 
+## D4/D5 additions
+- ISS: refreshLoop.promoteISS() finds the ISS in the propagated catalogue,
+  forces category 'iss', and overlays the live /api/iss (OpenNotify) position;
+  on failure keeps the SGP4 position (never dropped).
+- Planets: refreshLoop.fetchPlanetObjects() appends /api/planets (NASA Horizons)
+  objects each tick; a 503 is skipped (best-effort), satellites keep running.
+- API routes: /api/iss (OpenNotify, revalidate 3) · /api/planets (Horizons,
+  revalidate 60, sequential per-target to avoid throttling) · /api/geocode
+  (Nominatim proxy for the observer city search).
+- Pass predictions: lib/passPredictions.ts computePassPredictions() steps SGP4
+  in 10s increments, detecting altitude crossings of 10°. Runs in sgp4Worker via
+  the PREDICT_PASSES message → PASS_PREDICTIONS response.
+- UI: ObserverPicker (city search + geolocation + manual lat/lng; bottom sheet on
+  mobile), ObjectDetailPanel (slide-in on globe entity click, live readouts,
+  embeds PassPredictionPanel for satellites/ISS only), TopBar observer toggle.
+- Globe selection: CelestialGlobe LEFT_CLICK ScreenSpaceEventHandler sets
+  selectedObjectId (null on background click → panel slides out).
+
+NOTE: CelesTrak is currently unreachable from the dev environment, so /api/tle
+502s and the live pipeline stays empty — verify object features via ?dev=true
+seed (lib/seedDevData.ts). OpenNotify / Horizons / Nominatim are reachable.
+
 ## Dev conventions
 - All API calls go through /app/api/ route handlers (server-side), never
   directly from the browser (avoids CORS on CelesTrak/Horizons)
@@ -72,8 +105,11 @@ from last successful fetch stored in a module-level cache object in lib/
 - D2 ✓ Data pipeline (CelesTrak TLEs + satellite.js + Alt/Az; SGP4 in a Web Worker)
 - D3 ✓ Zenith Window cone + real-time object markers (category colours, in-place
        marker diffing, observer-reactive cone, 2h localStorage TLE cache)
-- D4 → ISS (OpenNotify) + Planets (NASA Horizons) integration
-- D5 → UI panels: observer picker, pass predictions, object detail
+- D4 ✓ ISS (OpenNotify live position) + Planets (NASA Horizons) integration
+       (shared ISS matcher, /api/iss + /api/planets routes)
+- D5 ✓ UI panels: ObserverPicker (search/geolocation/manual + mobile bottom
+       sheet) · PassPredictionPanel (SGP4 pass engine in worker) · ObjectDetailPanel
+       (globe-click selection, live readouts) · /api/geocode
 - D6 → Polish: animations, loading states, mobile layout
 - D7 → Hardening: fallbacks, error boundaries, demo script
 

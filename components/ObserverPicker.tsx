@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useZenithStore } from '@/store/zenithStore'
 
 interface GeocodeResult {
@@ -31,6 +31,18 @@ export default function ObserverPicker({ open, onClose }: ObserverPickerProps) {
 
   const [manualLat, setManualLat] = useState('')
   const [manualLng, setManualLng] = useState('')
+
+  // Entry animation: mount hidden, then flip to visible on the next frame so the
+  // opacity/translate transition runs each time the picker opens.
+  const [visible, setVisible] = useState(false)
+  useEffect(() => {
+    if (!open) {
+      setVisible(false)
+      return
+    }
+    const id = requestAnimationFrame(() => setVisible(true))
+    return () => cancelAnimationFrame(id)
+  }, [open])
 
   if (!open) return null
 
@@ -100,17 +112,31 @@ export default function ObserverPicker({ open, onClose }: ObserverPickerProps) {
   }
 
   const inputClass =
-    'w-full rounded-lg bg-white/5 border border-sky-400/20 px-3 py-2 text-sm text-white ' +
-    'placeholder:text-zinc-600 outline-none focus:border-sky-400/60'
+    'w-full rounded-lg bg-white/5 border border-cyan-500/20 px-3 py-2 text-sm text-white ' +
+    'placeholder:text-slate-500 outline-none focus:border-cyan-400/60'
 
   return (
-    <div className="fixed left-4 top-14 w-80 rounded-xl bg-black/70 backdrop-blur-md border border-sky-400/20 text-white text-sm shadow-2xl z-30">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-sky-400/15">
-        <span className="font-semibold text-sky-400 tracking-tight">Observer Location</span>
+    // Mobile: bottom sheet (full-width, anchored to the bottom, rounded top).
+    // sm+: floating panel anchored under the TopBar on the left.
+    <div
+      className={
+        'fixed z-30 bg-black/30 backdrop-blur-md text-white text-sm shadow-2xl ' +
+        'border-cyan-500/20 transition-all duration-200 ease-out ' +
+        (visible ? 'opacity-100 translate-y-0 ' : 'opacity-0 translate-y-1 ') +
+        'inset-x-0 bottom-0 w-full max-h-[85vh] overflow-y-auto rounded-t-2xl border-t ' +
+        'sm:inset-x-auto sm:bottom-auto sm:left-4 sm:top-14 sm:w-80 sm:max-h-none sm:overflow-visible sm:rounded-xl sm:border'
+      }
+    >
+      {/* Drag-handle affordance — bottom sheet only */}
+      <div className="sm:hidden flex justify-center pt-2">
+        <div className="h-1 w-10 rounded-full bg-white/20" />
+      </div>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-500/10">
+        <span className="font-semibold text-cyan-400 tracking-tight">Observer Location</span>
         <button
           onClick={onClose}
           aria-label="Close"
-          className="text-zinc-400 hover:text-sky-300"
+          className="text-slate-400 hover:text-cyan-300"
           style={{ transition: 'color 0.15s ease' }}
         >
           ✕
@@ -122,8 +148,7 @@ export default function ObserverPicker({ open, onClose }: ObserverPickerProps) {
         <button
           onClick={useMyLocation}
           disabled={geoLoading}
-          className="w-full rounded-lg bg-sky-400/15 border border-sky-400/30 px-3 py-2 text-sky-300 font-medium hover:bg-sky-400/25 disabled:opacity-50"
-          style={{ transition: 'background-color 0.15s ease' }}
+          className="w-full rounded-lg bg-cyan-500/10 border border-cyan-500/30 px-3 py-2 text-cyan-300 font-medium hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all duration-150 disabled:opacity-50"
         >
           {geoLoading ? 'Locating…' : '📍 Use my location'}
         </button>
@@ -145,24 +170,22 @@ export default function ObserverPicker({ open, onClose }: ObserverPickerProps) {
             <button
               onClick={runSearch}
               disabled={searching || query.trim() === ''}
-              className="shrink-0 rounded-lg bg-white/5 border border-sky-400/20 px-3 text-zinc-300 hover:text-sky-300 hover:border-sky-400/40 disabled:opacity-50"
-              style={{ transition: 'color 0.15s ease, border-color 0.15s ease' }}
+              className="shrink-0 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 rounded-lg px-3 py-1.5 transition-all duration-150 disabled:opacity-50"
             >
               {searching ? '…' : 'Go'}
             </button>
           </div>
 
           {results.length > 0 && (
-            <ul className="rounded-lg border border-white/10 divide-y divide-white/5 overflow-hidden">
+            <ul className="rounded-lg border border-cyan-500/10 overflow-hidden">
               {results.map((r, i) => (
                 <li key={`${r.latitude},${r.longitude},${i}`}>
                   <button
                     onClick={() => apply(r.latitude, r.longitude, shortLabel(r.label))}
-                    className="w-full text-left px-3 py-2 hover:bg-white/5"
-                    style={{ transition: 'background-color 0.1s ease' }}
+                    className="w-full text-left hover:bg-cyan-500/10 transition-colors duration-150 rounded-lg px-2 py-1.5 cursor-pointer"
                   >
                     <div className="text-white truncate">{shortLabel(r.label)}</div>
-                    <div className="text-zinc-500 text-xs truncate">{r.label}</div>
+                    <div className="text-slate-400 text-xs truncate">{r.label}</div>
                   </button>
                 </li>
               ))}
@@ -171,8 +194,8 @@ export default function ObserverPicker({ open, onClose }: ObserverPickerProps) {
         </div>
 
         {/* Manual lat/lng fallback */}
-        <div className="space-y-2 border-t border-white/5 pt-3">
-          <label className="block text-xs text-zinc-500">Or enter coordinates</label>
+        <div className="space-y-2 border-t border-cyan-500/10 pt-3">
+          <label className="block text-xs text-slate-400">Or enter coordinates</label>
           <div className="flex gap-2">
             <input
               type="number"
@@ -193,8 +216,7 @@ export default function ObserverPicker({ open, onClose }: ObserverPickerProps) {
           </div>
           <button
             onClick={applyManual}
-            className="w-full rounded-lg bg-white/5 border border-sky-400/20 px-3 py-2 text-zinc-300 hover:text-sky-300 hover:border-sky-400/40"
-            style={{ transition: 'color 0.15s ease, border-color 0.15s ease' }}
+            className="w-full bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 rounded-lg px-3 py-1.5 transition-all duration-150"
           >
             Set coordinates
           </button>

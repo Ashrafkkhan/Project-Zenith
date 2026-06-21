@@ -235,7 +235,8 @@ async function fetchPlanetObjects(
 function runPropagation(
   worker: Worker,
   observer: TickMessage['observer'],
-  intervalMs: number
+  intervalMs: number,
+  offsetMs: number
 ): Promise<CelestialObject[]> {
   return new Promise((resolve, reject) => {
     const onMessage = (e: MessageEvent<WorkerOutMessage>) => {
@@ -259,7 +260,7 @@ function runPropagation(
     }
     worker.addEventListener('message', onMessage)
     worker.addEventListener('error', onError)
-    worker.postMessage({ type: 'tick', observer, intervalMs } satisfies TickMessage)
+    worker.postMessage({ type: 'tick', observer, intervalMs, offsetMs } satisfies TickMessage)
   })
 }
 
@@ -296,7 +297,7 @@ export function startRefreshLoop(
     if (stopped || inFlight) return
     inFlight = true
 
-    const { observer, upsertObjects, setDataLoading, setLastError } = store.getState()
+    const { observer, offsetHours, upsertObjects, setDataLoading, setLastError } = store.getState()
     setDataLoading(true)
     try {
       // 1. Load TLEs (cached or freshly fetched, with 502 retry).
@@ -317,7 +318,8 @@ export function startRefreshLoop(
           longitude: observer.longitude,
           altitudeM: observer.altitudeM,
         },
-        intervalMs
+        intervalMs,
+        offsetHours * 3_600_000
       )
       if (stopped) return
 
