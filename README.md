@@ -182,7 +182,8 @@ zenith/
 │
 ├── lib/                    # Core logic & data pipeline
 │   ├── coordTransforms.ts   # ECI → ECEF → Geodetic → Topocentric
-│   ├── pipelineWorker.ts    # Real-time data fetch & propagation loop
+│   ├── refreshLoop.ts       # Real-time refresh loop (drives the SGP4 worker)
+│   ├── sgp4Worker.ts        # Web Worker: TLE fetch + SGP4 propagation
 │   ├── seedDevData.ts       # Sample satellite data for development
 │   └── tleParser.ts         # TLE (Two-Line Element) parser
 │

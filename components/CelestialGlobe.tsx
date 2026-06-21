@@ -5,7 +5,9 @@ import { useZenithStore } from '@/store/zenithStore'
 import type { CelestialObject } from '@/types/celestial'
 
 const CONE_LENGTH = 2_000_000
-const CONE_RADIUS = 280_000
+// Half-angle of 15° represents the 75°–90° zenith shell: an object at 75°
+// elevation sits 15° off the local vertical. radius = length · tan(15°).
+const CONE_RADIUS = Math.round(CONE_LENGTH * Math.tan((15 * Math.PI) / 180))
 const MAX_SAMPLES_PER_TICK = 6
 
 // ── Pre-built Color cache ─────────────────────────────────────────────────────
@@ -18,32 +20,39 @@ let C: Record<string, any> | null = null
 function buildColorCache(Cesium: any) {
   if (C) return
   C = {
-    satFill:       Cesium.Color.fromCssColorString('#4fc3f7').withAlpha(0.4),
-    satOutline:    Cesium.Color.fromCssColorString('#4fc3f7').withAlpha(0.15),
-    zenFill:       Cesium.Color.fromCssColorString('#00d4ff'),
-    zenOutline:    Cesium.Color.fromCssColorString('#c4b5fd').withAlpha(0.8),
-    issFill:       Cesium.Color.fromCssColorString('#ffcc02'),
-    issOutline:    Cesium.Color.WHITE.withAlpha(0.8),
-    coneBody:      Cesium.Color.fromCssColorString('#00d4ff').withAlpha(0.18),
-    coneOutline:   Cesium.Color.fromCssColorString('#00d4ff').withAlpha(0.7),
-    obsRingBody:   Cesium.Color.fromCssColorString('#7c3aed').withAlpha(0.12),
-    obsRingOL:     Cesium.Color.fromCssColorString('#c4b5fd').withAlpha(0.7),
-    obsDotFill:    Cesium.Color.fromCssColorString('#c4b5fd'),
-    labelFill:     Cesium.Color.WHITE,
-    labelOutline:  Cesium.Color.BLACK,
-    dotOutlineWh:  Cesium.Color.WHITE,
+    // Category fill colours (CLAUDE.md convention).
+    satFill: Cesium.Color.fromCssColorString('#4fc3f7'),
+    issFill: Cesium.Color.fromCssColorString('#ffcc02'),
+    planetFill: Cesium.Color.fromCssColorString('#ff8c69'),
+    // Subtle white edge so in-zenith points pop against the globe.
+    zenOutline: Cesium.Color.WHITE.withAlpha(0.85),
+    // Zenith cone.
+    coneBody: Cesium.Color.fromCssColorString('#00d4ff').withAlpha(0.15),
+    coneOutline: Cesium.Color.fromCssColorString('#00d4ff').withAlpha(0.6),
+    // Observer marker.
+    obsRingBody: Cesium.Color.fromCssColorString('#7c3aed').withAlpha(0.12),
+    obsRingOL: Cesium.Color.fromCssColorString('#c4b5fd').withAlpha(0.7),
+    obsDotFill: Cesium.Color.fromCssColorString('#c4b5fd'),
+    dotOutlineWh: Cesium.Color.WHITE,
+    // Labels.
+    labelFill: Cesium.Color.WHITE,
+    labelOutline: Cesium.Color.BLACK,
   }
 }
 
+// Colour strictly by category; size + label strictly by zenith-window state.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getPointStyle(category: string, inZenithWindow: boolean): any {
-  if (category === 'iss') {
-    return { color: C!.issFill, pixelSize: 14, outlineColor: C!.issOutline, outlineWidth: 3 }
+  const color =
+    category === 'iss' ? C!.issFill :
+      category === 'planet' ? C!.planetFill :
+        C!.satFill
+  return {
+    color,
+    pixelSize: inZenithWindow ? 8 : 4,
+    outlineColor: C!.zenOutline,
+    outlineWidth: inZenithWindow ? 1 : 0,
   }
-  if (inZenithWindow) {
-    return { color: C!.zenFill, pixelSize: 9, outlineColor: C!.zenOutline, outlineWidth: 3 }
-  }
-  return { color: C!.satFill, pixelSize: 2, outlineColor: C!.satOutline, outlineWidth: 0 }
 }
 
 function injectCesiumCSS() {
@@ -87,7 +96,6 @@ export default function CelestialGlobe() {
       if (cancelled || !containerRef.current) return
 
       buildColorCache(Cesium)
-      const { observer } = useZenithStore.getState()
 
       // ── Viewer ───────────────────────────────────────────────────────────────
       const ionToken = process.env.NEXT_PUBLIC_CESIUM_ION_TOKEN
@@ -188,26 +196,35 @@ export default function CelestialGlobe() {
       })
 
       // ── Zenith cone ───────────────────────────────────────────────────────────
-      const renderCone = (show: boolean) => {
+      // A CylinderGraphics approximating the 75°–90° shell, apex on the observer's
+      // surface point, opening straight up. Positions read fresh from the store.
+      const renderZenithCone = () => {
+        const obs = useZenithStore.getState().observer
+        const showCone = useZenithStore.getState().showZenithCone
+
         viewer.entities.removeById('zenith-cone')
-        const apex = Cesium.Cartesian3.fromDegrees(
-          observer.longitude, observer.latitude, observer.altitudeM
+        const surface = Cesium.Cartesian3.fromDegrees(
+          obs.longitude, obs.latitude, obs.altitudeM
         )
+        // Cylinder geometry is centred on its position, so lift the centre by half
+        // a cone-length to place the apex exactly on the observer's surface point.
         const center = Cesium.Cartesian3.fromDegrees(
-          observer.longitude, observer.latitude, observer.altitudeM + CONE_LENGTH / 2
+          obs.longitude, obs.latitude, obs.altitudeM + CONE_LENGTH / 2
         )
-        const enu = Cesium.Transforms.eastNorthUpToFixedFrame(apex)
-        const rotation = Cesium.Matrix4.getMatrix3(enu, new Cesium.Matrix3())
-        const orientation = Cesium.Quaternion.fromRotationMatrix(rotation)
+        // Point straight up: heading/pitch/roll all zero aligns the cylinder's +z
+        // axis with the local east-north-up "up" (zenith) vector.
+        const orientation = Cesium.Transforms.headingPitchRollQuaternion(
+          surface, new Cesium.HeadingPitchRoll(0, 0, 0)
+        )
         viewer.entities.add({
           id: 'zenith-cone',
-          show,
+          show: showCone,
           position: center,
           orientation,
           cylinder: {
             length: CONE_LENGTH,
-            topRadius: 0,
-            bottomRadius: CONE_RADIUS,
+            topRadius: CONE_RADIUS, // wide end — up in the sky
+            bottomRadius: 0, // apex — at the observer
             material: new Cesium.ColorMaterialProperty(C!.coneBody),
             outline: true,
             outlineColor: C!.coneOutline,
@@ -216,34 +233,43 @@ export default function CelestialGlobe() {
         })
       }
 
-      renderCone(useZenithStore.getState().showZenithCone)
-
       // ── Observer marker ───────────────────────────────────────────────────────
-      viewer.entities.add({
-        id: '__observer_dot__',
-        position: Cesium.Cartesian3.fromDegrees(observer.longitude, observer.latitude, 2000),
-        point: {
-          pixelSize: 12,
-          color: C!.obsDotFill,
-          outlineColor: C!.dotOutlineWh,
-          outlineWidth: 2,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
-      })
+      // Dot + range ring at the observer's surface position.
+      const renderObserverMarker = () => {
+        const obs = useZenithStore.getState().observer
 
-      viewer.entities.add({
-        id: '__observer_ring__',
-        position: Cesium.Cartesian3.fromDegrees(observer.longitude, observer.latitude, 1000),
-        ellipse: {
-          semiMajorAxis: 250000,
-          semiMinorAxis: 250000,
-          material: C!.obsRingBody,
-          outline: true,
-          outlineColor: C!.obsRingOL,
-          outlineWidth: 2,
-        },
-      })
+        viewer.entities.removeById('__observer_dot__')
+        viewer.entities.add({
+          id: '__observer_dot__',
+          position: Cesium.Cartesian3.fromDegrees(obs.longitude, obs.latitude, 2000),
+          point: {
+            pixelSize: 12,
+            color: C!.obsDotFill,
+            outlineColor: C!.dotOutlineWh,
+            outlineWidth: 2,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        })
 
+        viewer.entities.removeById('__observer_ring__')
+        viewer.entities.add({
+          id: '__observer_ring__',
+          position: Cesium.Cartesian3.fromDegrees(obs.longitude, obs.latitude, 1000),
+          ellipse: {
+            semiMajorAxis: 250000,
+            semiMinorAxis: 250000,
+            material: C!.obsRingBody,
+            outline: true,
+            outlineColor: C!.obsRingOL,
+            outlineWidth: 2,
+          },
+        })
+      }
+
+      renderZenithCone()
+      renderObserverMarker()
+
+      // Toggle cone visibility without rebuilding the entity.
       const unsubCone = useZenithStore.subscribe(
         (s) => s.showZenithCone,
         (show) => {
@@ -253,13 +279,23 @@ export default function CelestialGlobe() {
       )
       unsubs.push(unsubCone)
 
+      // Rebuild observer-anchored entities (cone + marker) when the observer moves.
+      const unsubObserver = useZenithStore.subscribe(
+        (s) => s.observer,
+        () => {
+          renderZenithCone()
+          renderObserverMarker()
+        }
+      )
+      unsubs.push(unsubObserver)
+
       // Scratch JulianDate reused across ticks — addSample copies before we mutate it again.
       const scratchT1 = new Cesium.JulianDate()
 
       // ── Delta satellite entity sync ───────────────────────────────────────────
-      // Deferred to the next animation frame so the Zustand notify → syncEntities
+      // Deferred to the next animation frame so the Zustand notify → syncObjectMarkers
       // path never blocks the render thread mid-frame.
-      const syncEntities = (objects: Map<string, CelestialObject>) => {
+      const syncObjectMarkers = (objects: Map<string, CelestialObject>) => {
         if (!viewer || viewer.isDestroyed()) return
 
         // Remove stale entities using entityCache (O(cache size)) instead of
@@ -319,18 +355,18 @@ export default function CelestialGlobe() {
               const entity = viewer.entities.getById(obj.id)
               if (entity?.point) {
                 const style = getPointStyle(obj.category, obj.inZenithWindow)
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ;(entity.point.pixelSize as any).setValue(style.pixelSize)
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ;(entity.point.outlineWidth as any).setValue(style.outlineWidth)
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ;(entity.point.color as any).setValue(style.color)
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ;(entity.point.outlineColor as any).setValue(style.outlineColor)
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  ; (entity.point.pixelSize as any).setValue(style.pixelSize)
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  ; (entity.point.outlineWidth as any).setValue(style.outlineWidth)
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  ; (entity.point.color as any).setValue(style.color)
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  ; (entity.point.outlineColor as any).setValue(style.outlineColor)
               }
               if (entity?.label) {
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ;(entity.label.show as any).setValue(obj.inZenithWindow)
+                ; (entity.label.show as any).setValue(obj.inZenithWindow)
               }
             }
           } else {
@@ -383,17 +419,17 @@ export default function CelestialGlobe() {
       }
 
       // Initial sync runs immediately (no RAF — viewer just initialised, nothing to block).
-      syncEntities(useZenithStore.getState().objects)
+      syncObjectMarkers(useZenithStore.getState().objects)
 
       // Subsequent updates are deferred to the next animation frame so the
-      // Zustand → syncEntities path never stalls Cesium mid-render.
+      // Zustand → syncObjectMarkers path never stalls Cesium mid-render.
       const unsubObjects = useZenithStore.subscribe(
         (s) => s.objects,
         (objects) => {
           if (pendingSyncRaf) return // already queued, skip
           pendingSyncRaf = requestAnimationFrame(() => {
             pendingSyncRaf = 0
-            syncEntities(objects)
+            syncObjectMarkers(objects)
           })
         }
       )

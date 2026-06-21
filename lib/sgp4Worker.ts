@@ -1,6 +1,6 @@
 /**
  * Web Worker — all SGP4 orbital propagation runs here, off the main thread.
- * Instantiated by pipelineWorker.ts via:
+ * Instantiated by refreshLoop.ts via:
  *   new Worker(new URL('./sgp4Worker.ts', import.meta.url))
  *
  * Uses relative imports (not @/ aliases) because webpack bundles this

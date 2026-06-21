@@ -65,3 +65,6 @@ export const useZenithStore = create<ZenithState>()(
     setLastError: (message) => set({ lastError: message }),
   }))
 )
+
+/** The bound store instance type — used for dependency injection (e.g. refreshLoop). */
+export type ZenithStore = typeof useZenithStore
