@@ -49,12 +49,8 @@ body {
 }
 .zenith-badge-glow { animation: zenithBadgePulse 2s ease-in-out infinite; }
 
-/* ── Radar sonar ping (RadarOverlay) ───────────────────────────────────────── */
-@keyframes radarPulse {
-  0% { r: 40%; opacity: 0.6; }
-  100% { r: 50%; opacity: 0; }
-}
-.radar-pulse { animation: radarPulse 2.5s ease-out infinite; }
+/* Radar sonar ping is now JS-driven in RadarOverlay (CSS `r` animation isn't
+   supported in Safari/Firefox), so no keyframe is needed here. */
 
 /* ── Page-level cosmic entry (page.tsx UI wrapper) ─────────────────────────── */
 @keyframes cosmicFadeIn {
