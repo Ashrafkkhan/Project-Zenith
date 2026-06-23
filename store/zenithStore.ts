@@ -14,11 +14,14 @@ interface ZenithState {
   lastError: string | null
   /** Id of the object whose detail panel is open, or null when none is selected. */
   selectedObjectId: string | null
+  /** Id of the satellite currently being tracked in 3D third-person mode, or null. */
+  trackingObjectId: string | null
   /** Time Machine offset in hours added to the propagation timestamp (0 = now). */
   offsetHours: number
   upsertObjects: (objs: CelestialObject[]) => void
   setObserver: (observer: ObserverLocation) => void
   setSelectedObjectId: (id: string | null) => void
+  setTrackingObjectId: (id: string | null) => void
   toggleZenithCone: () => void
   offsetTimeHours: (hours: number) => void
   setDataLoading: (loading: boolean) => void
@@ -40,6 +43,7 @@ export const useZenithStore = create<ZenithState>()(
     dataLoading: false,
     lastError: null,
     selectedObjectId: null,
+    trackingObjectId: null,
     offsetHours: 0,
 
     upsertObjects: (objs) =>
@@ -72,6 +76,8 @@ export const useZenithStore = create<ZenithState>()(
     setObserver: (observer) => set({ observer }),
 
     setSelectedObjectId: (selectedObjectId) => set({ selectedObjectId }),
+
+    setTrackingObjectId: (trackingObjectId) => set({ trackingObjectId }),
 
     toggleZenithCone: () =>
       set((state) => ({ showZenithCone: !state.showZenithCone })),

@@ -51,6 +51,8 @@ export default function ObjectDetailPanel() {
     selectedObjectId ? s.objects.get(selectedObjectId) : undefined
   )
   const setSelectedObjectId = useZenithStore((s) => s.setSelectedObjectId)
+  const trackingObjectId = useZenithStore((s) => s.trackingObjectId)
+  const setTrackingObjectId = useZenithStore((s) => s.setTrackingObjectId)
 
   // Retain the last shown object so its content stays visible during slide-out.
   const [shown, setShown] = useState<CelestialObject | undefined>(undefined)
@@ -75,7 +77,8 @@ export default function ObjectDetailPanel() {
       }
     : null
 
-  const close = () => setSelectedObjectId(null)
+  const close = () => { setTrackingObjectId(null); setSelectedObjectId(null) }
+  const isTracking = selectedObjectId !== null && trackingObjectId === selectedObjectId
 
   return (
     <div
@@ -129,6 +132,21 @@ export default function ObjectDetailPanel() {
                   >
                     ✦ In Zenith Window
                   </span>
+                )}
+
+                {isTracking && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-mono font-bold text-cyan-300 animate-pulse">
+                      ● TRACKING
+                    </span>
+                    <button
+                      onClick={() => { setTrackingObjectId(null); setSelectedObjectId(null) }}
+                      className="text-[10px] text-slate-400 hover:text-red-400 border border-slate-600/50 rounded-full px-2 py-0.5 font-mono"
+                      style={{ transition: 'color 0.15s ease' }}
+                    >
+                      ✕ Exit
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
