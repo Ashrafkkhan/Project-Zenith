@@ -153,34 +153,51 @@ export default function ObjectDetailPanel() {
 
             {/* Scrollable body */}
             <div className="flex-1 overflow-y-auto">
-              {/* Live topocentric + geodetic readouts */}
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-3 px-5 py-4">
-                <Field label="Altitude" value={`${data.topo.altitude.toFixed(2)}°`} />
-                <Field label="Azimuth" value={`${data.topo.azimuth.toFixed(2)}°`} />
-                <Field label="Latitude" value={`${data.geo.latitude.toFixed(4)}°`} />
-                <Field label="Longitude" value={`${data.geo.longitude.toFixed(4)}°`} />
-                <Field label="Height" value={formatHeight(data.geo.heightKm)} />
-                <Field label="Range" value={formatHeight(data.topo.rangekm)} />
-              </dl>
+              {data.solarBody ? (
+                /* Solar-system body: orbital facts instead of topocentric readouts,
+                   whose Alt/Az/geo don't apply to a body on its own orbit. */
+                <>
+                  <dl className="grid grid-cols-1 gap-y-3 px-5 py-4">
+                    {data.facts?.map((f) => (
+                      <Field key={f.label} label={f.label} value={f.value} />
+                    ))}
+                  </dl>
+                  <div className="px-5 pb-4 text-[10px] text-slate-500 font-mono">
+                    Solar-system body · distances &amp; sizes not to scale
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Live topocentric + geodetic readouts */}
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-3 px-5 py-4">
+                    <Field label="Altitude" value={`${data.topo.altitude.toFixed(2)}°`} />
+                    <Field label="Azimuth" value={`${data.topo.azimuth.toFixed(2)}°`} />
+                    <Field label="Latitude" value={`${data.geo.latitude.toFixed(4)}°`} />
+                    <Field label="Longitude" value={`${data.geo.longitude.toFixed(4)}°`} />
+                    <Field label="Height" value={formatHeight(data.geo.heightKm)} />
+                    <Field label="Range" value={formatHeight(data.topo.rangekm)} />
+                  </dl>
 
-              {/* Category-specific data source */}
-              <div className="px-5 pb-4 text-xs text-slate-400 font-mono">
-                {data.category === 'satellite' &&
-                  (() => {
-                    const age = tleEpochAgeDays(data.line1)
-                    return age === null
-                      ? 'TLE epoch unavailable'
-                      : `TLE epoch age: ${age.toFixed(1)} days`
-                  })()}
-                {data.category === 'iss' && 'Live position via OpenNotify'}
-                {data.category === 'planet' && 'Ephemeris via NASA Horizons'}
-              </div>
+                  {/* Category-specific data source */}
+                  <div className="px-5 pb-4 text-xs text-slate-400 font-mono">
+                    {data.category === 'satellite' &&
+                      (() => {
+                        const age = tleEpochAgeDays(data.line1)
+                        return age === null
+                          ? 'TLE epoch unavailable'
+                          : `TLE epoch age: ${age.toFixed(1)} days`
+                      })()}
+                    {data.category === 'iss' && 'Live position via OpenNotify'}
+                    {data.category === 'planet' && 'Ephemeris via NASA Horizons'}
+                  </div>
 
-              {/* Pass predictions — satellites & ISS only (not planets) */}
-              {(data.category === 'satellite' || data.category === 'iss') && (
-                <div className="border-t border-cyan-500/10">
-                  <PassPredictionPanel selectedObjectId={selectedObjectId} />
-                </div>
+                  {/* Pass predictions — satellites & ISS only (not planets) */}
+                  {(data.category === 'satellite' || data.category === 'iss') && (
+                    <div className="border-t border-cyan-500/10">
+                      <PassPredictionPanel selectedObjectId={selectedObjectId} />
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </>

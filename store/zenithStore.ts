@@ -6,6 +6,12 @@ import { ZENITH_WINDOW } from '@/types/celestial'
 interface ZenithState {
   observer: ObserverLocation
   objects: Map<string, CelestialObject>
+  /**
+   * Solar-system bodies (Sun + planets). Held separately because the pipeline
+   * replaces `objects` wholesale each tick; these are re-merged into `objects`
+   * on every upsert so selection/search/panel keep finding them.
+   */
+  solarObjects: CelestialObject[]
   zenithObjects: CelestialObject[]
   /** Highest topocentric altitude among all tracked objects. Computed in upsertObjects. */
   maxAltitude: number | null
@@ -19,6 +25,8 @@ interface ZenithState {
   /** Time Machine offset in hours added to the propagation timestamp (0 = now). */
   offsetHours: number
   upsertObjects: (objs: CelestialObject[]) => void
+  /** Register the solar-system bodies once; merged into `objects` immediately and on every tick. */
+  setSolarObjects: (bodies: CelestialObject[]) => void
   setObserver: (observer: ObserverLocation) => void
   setSelectedObjectId: (id: string | null) => void
   setTrackingObjectId: (id: string | null) => void
@@ -37,6 +45,7 @@ export const useZenithStore = create<ZenithState>()(
       label: 'Chennai',
     },
     objects: new Map(),
+    solarObjects: [],
     zenithObjects: [],
     maxAltitude: null,
     showZenithCone: true,
@@ -47,8 +56,8 @@ export const useZenithStore = create<ZenithState>()(
     offsetHours: 0,
 
     upsertObjects: (objs) =>
-      set(() => {
-        const next = new Map()
+      set((state) => {
+        const next = new Map<string, CelestialObject>()
         let maxAlt = -Infinity
         const zenithObjects: CelestialObject[] = []
 
@@ -62,11 +71,26 @@ export const useZenithStore = create<ZenithState>()(
           }
         }
 
+        // Re-merge the solar bodies after the pipeline objects (they don't count
+        // toward zenithObjects / maxAltitude — those were derived from `objs` only).
+        for (const body of state.solarObjects) {
+          next.set(body.id, body)
+        }
+
         return {
           objects: next,
           zenithObjects,
           maxAltitude: maxAlt > -Infinity ? maxAlt : null,
         }
+      }),
+
+    setSolarObjects: (bodies) =>
+      set((state) => {
+        // Store them, and merge into the live `objects` map immediately so they're
+        // selectable/searchable before the next pipeline tick.
+        const next = new Map(state.objects)
+        for (const body of bodies) next.set(body.id, body)
+        return { solarObjects: bodies, objects: next }
       }),
 
     // Moving the observer doesn't touch `objects`: the refresh loop reads the

@@ -49,4 +49,13 @@ export interface CelestialObject {
   topo: TopocentricPosition
   inZenithWindow: boolean
   updatedAt: number
+  /**
+   * True for bodies rendered by the 3D solar-system module (Sun + planets). Their
+   * scene position is driven by orbital math in Cesium, NOT by `geo`, so the globe's
+   * geo-based marker sync skips them. They still live in the store so selection,
+   * search, and the detail panel reuse the existing satellite machinery.
+   */
+  solarBody?: boolean
+  /** Optional label/value rows shown in the detail panel (used for solar bodies). */
+  facts?: { label: string; value: string }[]
 }

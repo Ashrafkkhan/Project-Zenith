@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useZenithStore } from '@/store/zenithStore'
 import ObserverPicker from '@/components/ObserverPicker'
+import ObjectSearch from '@/components/ObjectSearch'
 
 export default function TopBar() {
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -25,6 +26,8 @@ export default function TopBar() {
       </div>
 
       <div className="flex items-center gap-3 text-sm">
+        <ObjectSearch />
+
         <button
           onClick={() => setPickerOpen((o) => !o)}
           aria-expanded={pickerOpen}

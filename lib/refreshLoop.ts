@@ -6,6 +6,12 @@ import { geodeticToTopocentric } from './coordTransforms'
 
 const DEFAULT_INTERVAL_MS = 10_000
 
+// Planets are now rendered as a 3D solar system (lib/solarSystem.ts) orbiting the
+// globe, so the old NASA-Horizons "sky point near Earth" planets are disabled to
+// avoid showing each planet twice (and two hits per planet in search). Flip to
+// true to restore the geocentric Horizons sky points instead.
+const USE_HORIZONS_PLANETS = false
+
 // TLE cache lives on the main thread (localStorage is unavailable in a Worker).
 const TLE_CACHE_KEY = 'zenith_tle_cache'
 const TLE_TTL_MS = 2 * 60 * 60 * 1000 // 2 hours — matches CelesTrak's update cadence.
@@ -332,9 +338,12 @@ export function startRefreshLoop(
       if (stopped) return
 
       // 2c. Append planets from NASA Horizons (best-effort — skipped on failure).
-      const planets = await fetchPlanetObjects(observer, Date.now())
-      if (stopped) return
-      updatedObjects.push(...planets)
+      // Disabled by default — planets are drawn by the 3D solar-system module now.
+      if (USE_HORIZONS_PLANETS) {
+        const planets = await fetchPlanetObjects(observer, Date.now())
+        if (stopped) return
+        updatedObjects.push(...planets)
+      }
 
       // 3. Push the new positions into the store.
       upsertObjects(updatedObjects)

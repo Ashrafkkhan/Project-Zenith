@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import { useZenithStore } from '@/store/zenithStore'
+import { initSolarSystem } from '@/lib/solarSystem'
 import type { CelestialObject, GeoPosition } from '@/types/celestial'
 
 const CONE_LENGTH = 2_000_000
@@ -456,6 +457,10 @@ export default function CelestialGlobe() {
         const trackingId = useZenithStore.getState().trackingObjectId
 
         for (const obj of objects.values()) {
+          // Solar-system bodies (Sun + planets) are drawn by the solar-system module
+          // at their orbital scene positions, not from geo — skip them entirely here.
+          if (obj.solarBody) continue
+
           const isActive = obj.category === 'planet' || obj.category === 'iss' || obj.inZenithWindow || obj.id === selectedId || obj.id === trackingId
 
           if (isActive) {
@@ -754,6 +759,13 @@ export default function CelestialGlobe() {
       )
       unsubs.push(unsubTracking)
       unsubs.push(clearTrackingView)
+
+      // ── Solar system (built around the untouched Earth) ───────────────────────
+      // Adds the Sun + planets + Moon as sibling entities orbiting the fixed Earth.
+      // It only reads the viewer/store and adds its own entities — Earth, satellites,
+      // the cone, the observer marker, and the camera defaults are all left intact.
+      const disposeSolarSystem = initSolarSystem(Cesium, viewer, useZenithStore)
+      unsubs.push(disposeSolarSystem)
     })
 
     return () => {
