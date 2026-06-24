@@ -24,6 +24,10 @@ interface ZenithState {
   trackingObjectId: string | null
   /** Time Machine offset in hours added to the propagation timestamp (0 = now). */
   offsetHours: number
+  /** True once the Cesium globe has initialised and its first tiles have rendered. */
+  globeReady: boolean
+  /** When true, the globe caps its frame rate to free the GPU (e.g. while the landing overlay is up). */
+  globeLowPower: boolean
   upsertObjects: (objs: CelestialObject[]) => void
   /** Register the solar-system bodies once; merged into `objects` immediately and on every tick. */
   setSolarObjects: (bodies: CelestialObject[]) => void
@@ -34,6 +38,8 @@ interface ZenithState {
   offsetTimeHours: (hours: number) => void
   setDataLoading: (loading: boolean) => void
   setLastError: (message: string | null) => void
+  setGlobeReady: (ready: boolean) => void
+  setGlobeLowPower: (low: boolean) => void
 }
 
 export const useZenithStore = create<ZenithState>()(
@@ -54,6 +60,8 @@ export const useZenithStore = create<ZenithState>()(
     selectedObjectId: null,
     trackingObjectId: null,
     offsetHours: 0,
+    globeReady: false,
+    globeLowPower: false,
 
     upsertObjects: (objs) =>
       set((state) => {
@@ -113,6 +121,10 @@ export const useZenithStore = create<ZenithState>()(
     setDataLoading: (loading) => set({ dataLoading: loading }),
 
     setLastError: (message) => set({ lastError: message }),
+
+    setGlobeReady: (globeReady) => set({ globeReady }),
+
+    setGlobeLowPower: (globeLowPower) => set({ globeLowPower }),
   }))
 )
 

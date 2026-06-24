@@ -39,6 +39,20 @@ const MOON_DIST = 1.2e8
 const MOON_PERIOD_SEC = 14
 const MOON_RADIUS = 2.6e6
 
+// On-screen pixel size a body is pinned to while it's selected, so it fills a good
+// chunk of the view (you can orbit around it / zoom in to inspect it).
+const SELECTED_MIN_PX = 300
+// Camera offset (metres, local east-north-up) used when locking onto a body. A
+// fixed offset means framing never depends on the GLB's intrinsic geometry size
+// (which is what made the old flyTo land the camera inside the planet).
+const SELECTED_VIEW_FROM: [number, number, number] = [0, -1.0e6, 5.0e5]
+
+// Opening camera view — MUST match CelestialGlobe's initial setView so exiting a
+// body returns the globe to exactly how it looked when the site loaded.
+const HOME_VIEW_LON = 80.24
+const HOME_VIEW_LAT = 12.97
+const HOME_VIEW_HEIGHT = 22_000_000
+
 const TWO_PI = Math.PI * 2
 
 interface BodyConfig {
@@ -196,6 +210,8 @@ export function initSolarSystem(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const revealList: { entity: any; at: number }[] = []
   const solarStoreObjects: CelestialObject[] = []
+  // Orrery (unselected) pixel size per body, so we can restore it after a select.
+  const minPxById = new Map<string, number>()
 
   for (const b of BODIES) {
     const omega = b.periodYears > 0 ? TWO_PI / (b.periodYears * SCENE_YEAR_SEC) : 0
@@ -238,6 +254,9 @@ export function initSolarSystem(
       name: b.name,
       position: positionProp,
       orientation: orientationProp,
+      // Fixed camera offset used when this body is locked onto (trackedEntity).
+      // A constant offset keeps framing independent of the model's geometry size.
+      viewFrom: new Cesium.Cartesian3(...SELECTED_VIEW_FROM),
       model: {
         uri: b.uri,
         // Keep each body at least this many pixels at any zoom, so the wide
@@ -260,6 +279,7 @@ export function initSolarSystem(
     })
     created.push(entity)
     revealList.push({ entity, at: revealDistance(b) })
+    minPxById.set(b.id, b.minPx)
 
     // Register in the store (metadata only — geo/topo are unused placeholders) so
     // clicking, searching, and the detail panel reuse the existing machinery.
@@ -327,36 +347,89 @@ export function initSolarSystem(
   }
   viewer.scene.preRender.addEventListener(onPreRender)
 
-  // ── Click-to-fly (reuses selectedObjectId) ──────────────────────────────────
+  // ── Select a body → lock the camera onto it; exit → fly home ────────────────
   // The existing globe click handler already sets selectedObjectId for any object
-  // in the store (planets included). Here we add the camera move: when a solar
-  // body is selected, smoothly fly to it — the same kind of fly used elsewhere.
-  let lastFlown: string | null = null
+  // in the store (solar bodies included), and never sets trackingObjectId for them.
+  // So the camera is ours to drive here: lock onto the body (trackedEntity, framed
+  // by its fixed viewFrom) and pin it large on screen so it's clearly visible and
+  // can be orbited / watched as it spins. On exit, return to the opening view.
+  let trackedPlanetId: string | null = null
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const restoreSize = (planetId: string | null) => {
+    if (!planetId) return
+    const e = viewer.entities.getById(planetId)
+    if (e?.model) e.model.minimumPixelSize = minPxById.get(planetId) ?? 24
+  }
+
+  const flyHome = () => {
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(HOME_VIEW_LON, HOME_VIEW_LAT, HOME_VIEW_HEIGHT),
+      orientation: {
+        heading: Cesium.Math.toRadians(0),
+        pitch: Cesium.Math.toRadians(-90),
+        roll: 0,
+      },
+      duration: 1.5,
+      easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
+    })
+  }
+
   const unsubSelect = store.subscribe(
     (s) => s.selectedObjectId,
     (id) => {
-      if (!id || viewer.isDestroyed()) { lastFlown = null; return }
-      // ONLY act on solar bodies. Satellites/ISS are also entities and drive their
-      // own camera (tracking lock) — flying to them here would fight that.
-      const obj = store.getState().objects.get(id)
-      if (!obj?.solarBody) { lastFlown = null; return }
-      if (id === lastFlown) return
-      const entity = viewer.entities.getById(id)
+      if (viewer.isDestroyed()) return
+      const obj = id ? store.getState().objects.get(id) : undefined
+      const isSolar = !!obj?.solarBody
+
+      if (isSolar && id === trackedPlanetId) return // re-selected the same body
+
+      // Tear down the currently-shown body (switching bodies / deselect / →satellite).
+      if (trackedPlanetId) {
+        restoreSize(trackedPlanetId)
+        trackedPlanetId = null
+        if (!isSolar) {
+          // A satellite was selected: it has ALREADY set its own trackedEntity
+          // (its subscription runs first), so leave the camera to it.
+          // A true deselect (id === null): release the lock and fly home.
+          if (id === null) {
+            viewer.trackedEntity = undefined
+            try { viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY) } catch { /* ignore */ }
+            flyHome()
+          }
+          return
+        }
+        // else: switching planet → planet, fall through to lock the new one.
+      } else if (!isSolar) {
+        return // nothing of ours was selected and the new selection isn't a body
+      }
+
+      // Lock onto the selected body, pinned large so it's clearly visible.
+      const entity = viewer.entities.getById(id!)
       if (!entity) return
-      lastFlown = id
-      // flyTo frames the body's bounding sphere with a gentle top-down-ish angle.
-      viewer.flyTo(entity, {
-        duration: 2.0,
-        offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-20), 0),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      }).catch(() => { /* flight cancelled by a newer interaction — fine */ })
+      if (entity.model) entity.model.minimumPixelSize = SELECTED_MIN_PX
+      trackedPlanetId = id!
+      viewer.trackedEntity = entity
     }
   )
+
+  // Escape exits a body view (mirrors the satellite Escape) → clears selection,
+  // which the subscription above turns into "release + fly home".
+  const onKeyDownSolar = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && trackedPlanetId) store.getState().setSelectedObjectId(null)
+  }
+  window.addEventListener('keydown', onKeyDownSolar)
 
   // ── Cleanup ───────────────────────────────────────────────────────────────
   return () => {
     unsubSelect()
+    window.removeEventListener('keydown', onKeyDownSolar)
     if (viewer.isDestroyed()) return
+    if (trackedPlanetId) {
+      restoreSize(trackedPlanetId)
+      viewer.trackedEntity = undefined
+      try { viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY) } catch { /* ignore */ }
+    }
     try { viewer.scene.preRender.removeEventListener(onPreRender) } catch { /* ignore */ }
     for (const e of created) {
       try { viewer.entities.remove(e) } catch { /* ignore */ }

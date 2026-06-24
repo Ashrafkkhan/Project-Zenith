@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { useZenithStore } from '@/store/zenithStore'
 import { ZENITH_WINDOW } from '@/types/celestial'
 
@@ -133,28 +134,66 @@ export default function ZenithWindow() {
   const selectedObjectId = useZenithStore((s) => s.selectedObjectId)
   const onSelectObject = useZenithStore((s) => s.setSelectedObjectId)
 
-  return (
-    <div className="pointer-events-auto absolute right-4 top-4 w-64 rounded-xl bg-black/30 backdrop-blur-md border border-cyan-500/20 text-white text-sm shadow-2xl z-20 p-3">
-      <ZenithScoreWidget />
+  // Mobile-only collapse so the panel doesn't blanket the globe on small screens.
+  // Desktop (sm+) always shows the full panel via `sm:block`, ignoring this state.
+  const [open, setOpen] = useState(false)
+  const bodyCls = open ? 'sm:block' : 'hidden sm:block'
 
-      <div className="flex items-center justify-between pb-2.5">
-        <div>
-          <span className="font-semibold text-cyan-400 tracking-tight">Zenith Window</span>
-          <span className="text-slate-400 text-xs font-mono ml-1.5">
-            {ZENITH_WINDOW.minAlt}°–{ZENITH_WINDOW.maxAlt}°
-          </span>
-        </div>
-        <button
-          onClick={toggleCone}
-          // Use specific property transitions — `transition: all` forces the browser
-          // to check every property on every frame.
-          className="text-xs text-slate-400 hover:text-cyan-300"
-          style={{ transition: 'color 0.15s ease' }}
-        >
-          {showCone ? 'Hide' : 'Show'} cone
-        </button>
+  return (
+    <div className="pointer-events-auto absolute right-4 top-4 w-64 max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-5.5rem)] overflow-y-auto rounded-xl bg-black/30 backdrop-blur-md border border-cyan-500/20 text-white text-sm shadow-2xl z-20 p-3">
+      {/* Score widget — part of the collapsible body on mobile */}
+      <div className={bodyCls}>
+        <ZenithScoreWidget />
       </div>
 
+      {/* Header — always visible; tap (mobile) to expand/collapse */}
+      <div className="flex items-center justify-between gap-2 pb-2.5">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="flex items-baseline gap-1.5 min-w-0 text-left"
+        >
+          <span className="font-semibold text-cyan-400 tracking-tight">Zenith Window</span>
+          <span className="text-slate-400 text-xs font-mono">
+            {ZENITH_WINDOW.minAlt}°–{ZENITH_WINDOW.maxAlt}°
+          </span>
+        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Compact overhead count — mobile only (full badge is in the TopBar on sm+) */}
+          {zenithObjects.length > 0 && (
+            <span className="sm:hidden text-cyan-400/90 text-xs font-mono">
+              {zenithObjects.length}
+            </span>
+          )}
+          <button
+            onClick={toggleCone}
+            // Use specific property transitions — `transition: all` forces the browser
+            // to check every property on every frame.
+            className="text-xs text-slate-400 hover:text-cyan-300"
+            style={{ transition: 'color 0.15s ease' }}
+          >
+            {showCone ? 'Hide' : 'Show'} cone
+          </button>
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-label="Toggle Zenith Window"
+            aria-expanded={open}
+            className="sm:hidden text-slate-400 hover:text-cyan-300 text-xs leading-none"
+          >
+            <span
+              className="inline-block transition-transform duration-200"
+              style={{ transform: open ? 'rotate(180deg)' : 'none' }}
+            >
+              ▾
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* Collapsible body (list + footer + time machine) */}
+      <div className={bodyCls}>
       {/* content-visibility: auto skips rendering off-screen list items
           entirely, which helps when the list is long. */}
       <div
@@ -214,6 +253,7 @@ export default function ZenithWindow() {
       )}
 
       <TimeMachine />
+      </div>
     </div>
   )
 }

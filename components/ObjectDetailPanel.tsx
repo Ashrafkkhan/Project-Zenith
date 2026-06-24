@@ -83,8 +83,15 @@ export default function ObjectDetailPanel() {
   return (
     <div
       aria-hidden={!open}
-      className={`fixed top-14 right-0 bottom-0 w-[22rem] max-w-[90vw] z-40 transition-all duration-300 ease-out ${
-        open ? 'translate-x-0' : 'translate-x-[110%] pointer-events-none'
+      // Mobile: a bottom sheet covering the lower ~45% so the selected planet /
+      //   satellite (centred by the camera) stays visible in the top portion.
+      // sm+: the original right-side full-height panel.
+      className={`fixed z-40 transition-transform duration-300 ease-out
+        inset-x-0 bottom-0 h-[45vh]
+        sm:inset-x-auto sm:left-auto sm:right-0 sm:top-14 sm:bottom-0 sm:h-auto sm:w-[22rem] sm:max-w-[90vw] ${
+        open
+          ? 'translate-x-0 translate-y-0'
+          : 'translate-y-full translate-x-0 sm:translate-y-0 sm:translate-x-[110%] pointer-events-none'
       }`}
     >
       <div

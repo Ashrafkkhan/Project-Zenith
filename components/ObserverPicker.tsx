@@ -123,7 +123,7 @@ export default function ObserverPicker({ open, onClose }: ObserverPickerProps) {
         'fixed z-30 bg-black/30 backdrop-blur-md text-white text-sm shadow-2xl ' +
         'border-cyan-500/20 transition-all duration-200 ease-out ' +
         (visible ? 'opacity-100 translate-y-0 ' : 'opacity-0 translate-y-1 ') +
-        'inset-x-0 bottom-0 w-full max-h-[85vh] overflow-y-auto rounded-t-2xl border-t ' +
+        'inset-x-0 bottom-0 w-full max-h-[85vh] overflow-y-auto rounded-t-2xl border-t pb-[env(safe-area-inset-bottom)] ' +
         'sm:inset-x-auto sm:bottom-auto sm:left-4 sm:top-14 sm:w-80 sm:max-h-none sm:overflow-visible sm:rounded-xl sm:border'
       }
     >

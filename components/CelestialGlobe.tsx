@@ -156,6 +156,8 @@ export default function CelestialGlobe() {
     let pointCollection: any = null
     // rAF handle so we never queue more than one sync per frame.
     let pendingSyncRaf = 0
+    // Safety timer so the landing's LAUNCH button never stays disabled forever.
+    let readyTimeout: ReturnType<typeof setTimeout> | null = null
 
     getCesium().then(async (Cesium) => {
       if (cancelled || !containerRef.current) return
@@ -190,6 +192,17 @@ export default function CelestialGlobe() {
 
       // Cap at 1.0× to significantly reduce pixel rendering load on high-DPI / 4K displays.
       viewer.resolutionScale = Math.min(window.devicePixelRatio ?? 1, 1.0)
+
+      // Low-power mode: while the landing overlay is up, cap the globe's frame rate
+      // so it doesn't contend with the astronaut model-viewer for the GPU. Restored
+      // to uncapped once the landing is dismissed.
+      const applyGlobePower = (low: boolean) => {
+        if (viewer && !viewer.isDestroyed()) viewer.targetFrameRate = low ? 20 : undefined
+      }
+      applyGlobePower(useZenithStore.getState().globeLowPower)
+      unsubs.push(
+        useZenithStore.subscribe((s) => s.globeLowPower, applyGlobePower)
+      )
 
       if (process.env.NODE_ENV === 'development') {
         viewer.scene.debugShowFramesPerSecond = true
@@ -766,11 +779,31 @@ export default function CelestialGlobe() {
       // the cone, the observer marker, and the camera defaults are all left intact.
       const disposeSolarSystem = initSolarSystem(Cesium, viewer, useZenithStore)
       unsubs.push(disposeSolarSystem)
+
+      // ── Globe-ready signal (drives the Landing overlay's LAUNCH button) ───────
+      // Fire once the globe's tiles for the opening view have finished loading, so
+      // the landing only reveals a fully-rendered globe. A timeout backstops it.
+      let readyFired = false
+      const markGlobeReady = () => {
+        if (readyFired || cancelled) return
+        readyFired = true
+        useZenithStore.getState().setGlobeReady(true)
+      }
+      const onTileProgress = (remaining: number) => {
+        if (remaining === 0) {
+          viewer.scene.globe.tileLoadProgressEvent.removeEventListener(onTileProgress)
+          markGlobeReady()
+        }
+      }
+      viewer.scene.globe.tileLoadProgressEvent.addEventListener(onTileProgress)
+      readyTimeout = setTimeout(markGlobeReady, 9000)
     })
 
     return () => {
       cancelled = true
       if (pendingSyncRaf) { cancelAnimationFrame(pendingSyncRaf); pendingSyncRaf = 0 }
+      if (readyTimeout) { clearTimeout(readyTimeout); readyTimeout = null }
+      useZenithStore.getState().setGlobeReady(false)
       unsubs.forEach((u) => u())
       entityCache.clear()
       pointCache.clear()

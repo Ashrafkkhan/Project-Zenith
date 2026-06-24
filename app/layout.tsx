@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 
@@ -21,6 +21,18 @@ const spaceGrotesk = Space_Grotesk({
 export const metadata: Metadata = {
   title: 'Project Zenith — The Celestial Eye',
   description: "Real-time celestial tracking · Aaruush '26 AstralWeb Innovate",
+};
+
+// Mobile: render at device width and let the Cesium canvas own pinch-zoom (so the
+// page UI never gets browser-zoomed). viewportFit:'cover' enables safe-area insets
+// on notched phones.
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: 'cover',
+  themeColor: '#050510',
 };
 
 export default function RootLayout({

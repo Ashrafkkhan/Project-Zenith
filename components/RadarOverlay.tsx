@@ -26,13 +26,15 @@ export default function RadarOverlay() {
 
   return (
     <div
-      className="absolute bottom-4 left-4 z-10 pointer-events-none"
-      style={{ width: SIZE, height: SIZE }}
+      // Responsive: ~36vw (capped) on phones so it doesn't crowd the screen, full
+      // 200px from sm up. The SVG fills the box and scales via its viewBox.
+      className="absolute bottom-4 left-4 z-10 pointer-events-none w-[36vw] max-w-[150px] sm:w-[200px] sm:max-w-none aspect-square"
+      style={{ marginBottom: 'env(safe-area-inset-bottom)' }}
     >
       <svg
         viewBox={`0 0 ${SIZE} ${SIZE}`}
-        width={SIZE}
-        height={SIZE}
+        width="100%"
+        height="100%"
         style={{ mixBlendMode: 'screen' }}
       >
         {/* Background disc */}

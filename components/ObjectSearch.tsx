@@ -57,8 +57,8 @@ export default function ObjectSearch() {
           onFocus={() => setFocused(true)}
           // Delay so a result's onMouseDown registers before the dropdown unmounts.
           onBlur={() => setTimeout(() => setFocused(false), 120)}
-          placeholder="Search objects…"
-          className="bg-transparent text-white text-sm placeholder:text-slate-500 outline-none w-28 sm:w-40"
+          placeholder="Search…"
+          className="bg-transparent text-white text-sm placeholder:text-slate-500 outline-none w-24 sm:w-40"
         />
         {query && (
           <button
@@ -72,7 +72,7 @@ export default function ObjectSearch() {
       </div>
 
       {open && (
-        <div className="absolute left-0 mt-1.5 w-64 max-h-72 overflow-y-auto rounded-xl bg-black/80 backdrop-blur-md border border-cyan-500/20 shadow-2xl z-50 py-1">
+        <div className="absolute right-0 sm:right-auto sm:left-0 mt-1.5 w-64 max-w-[calc(100vw-1.5rem)] max-h-72 overflow-y-auto rounded-xl bg-black/80 backdrop-blur-md border border-cyan-500/20 shadow-2xl z-50 py-1">
           {matches.length === 0 ? (
             <p className="px-3 py-2 text-slate-500 text-xs">No matches</p>
           ) : (
