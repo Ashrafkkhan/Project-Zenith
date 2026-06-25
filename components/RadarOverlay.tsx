@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useRef, useState } from 'react'
 import { useZenithStore } from '@/store/zenithStore'
 
 // SVG radar geometry (viewBox units == pixels at the rendered size).
@@ -23,6 +24,23 @@ export default function RadarOverlay() {
   // Only zenith-window objects are plotted (Change 7). Re-renders when the set
   // changes — no rAF loop needed for a handful of dots.
   const zenithObjects = useZenithStore((s) => s.zenithObjects)
+
+  // Sonar pulse driven by requestAnimationFrame (native frame rate) instead of a
+  // 50 ms interval. A single batched setState per frame avoids two re-renders,
+  // and rAF auto-pauses when the tab is backgrounded.
+  const [pulse, setPulse] = useState({ r: 40, opacity: 0.5 })
+  const rafRef = useRef<number | undefined>(undefined)
+  const startTimeRef = useRef<number>(Date.now())
+  useEffect(() => {
+    const animate = () => {
+      const elapsed = (Date.now() - startTimeRef.current) % 2500
+      const progress = elapsed / 2500 // 0 → 1 over 2.5 s
+      setPulse({ r: 40 + progress * 10, opacity: 0.5 * (1 - progress) })
+      rafRef.current = requestAnimationFrame(animate)
+    }
+    rafRef.current = requestAnimationFrame(animate)
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
+  }, [])
 
   return (
     <div
@@ -86,15 +104,15 @@ export default function RadarOverlay() {
           strokeWidth={0.5}
         />
 
-        {/* Pulsing sonar ring */}
+        {/* Pulsing sonar ring (JS-driven r + opacity) */}
         <circle
-          className="radar-pulse"
           cx="50%"
           cy="50%"
-          r="48%"
+          r={`${pulse.r}%`}
           fill="none"
           stroke="rgba(6,182,212,0.4)"
           strokeWidth={1}
+          opacity={pulse.opacity}
         />
 
         {/* Rotating sweep line */}
@@ -161,7 +179,7 @@ export default function RadarOverlay() {
           strokeWidth={1}
         />
 
-        {/* Zenith-window object dots: ISS gold (5px), others cyan (3px) */}
+        {/* Zenith-window object dots: ISS gold (r=4), others cyan (r=3) */}
         {zenithObjects.map((o) => {
           const { x, y } = project(o.topo.azimuth, o.topo.altitude)
           const isISS = o.category === 'iss'
@@ -170,7 +188,7 @@ export default function RadarOverlay() {
               key={o.id}
               cx={x}
               cy={y}
-              r={isISS ? 5 : 3}
+              r={isISS ? 4 : 3}
               fill={isISS ? '#ffcc02' : '#4fc3f7'}
             />
           )

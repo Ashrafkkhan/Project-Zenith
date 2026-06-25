@@ -2,27 +2,15 @@
 
 import { useEffect, useRef } from 'react'
 import { useZenithStore } from '@/store/zenithStore'
-import { initSolarSystem } from '@/lib/solarSystem'
-import type { CelestialObject, GeoPosition } from '@/types/celestial'
+import type { CelestialObject } from '@/types/celestial'
 
 const CONE_LENGTH = 2_000_000
 // Half-angle of 15° represents the 75°–90° zenith shell: an object at 75°
 // elevation sits 15° off the local vertical. radius = length · tan(15°).
 const CONE_RADIUS = Math.round(CONE_LENGTH * Math.tan((15 * Math.PI) / 180))
-const MAX_SAMPLES_PER_TICK = 6
-
-// Opening camera view — looking straight down on the observer region from high
-// orbit. Reused on tracking exit so the globe returns to its initial framing.
-const HOME_VIEW_LON = 80.24
-const HOME_VIEW_LAT = 12.97
-const HOME_VIEW_HEIGHT = 22_000_000
-
-// ── Orbital trail ring buffers ────────────────────────────────────────────────
-// Last N geo positions per tracked (zenith / ISS) object, used to draw a fading
-// glow polyline behind the marker. Module-level so it survives React re-mounts;
-// cleared in the effect cleanup.
+// ── Orbital trail ring buffer ─────────────────────────────────────────────────
+// Max samples kept per trail object for its glow polyline (oldest shifted off).
 const TRAIL_LENGTH = 8
-const trailBuffers = new Map<string, GeoPosition[]>()
 
 // ── Pre-built Color cache ─────────────────────────────────────────────────────
 // Populated once after Cesium loads so getPointStyle never parses CSS strings
@@ -44,10 +32,11 @@ function buildColorCache(Cesium: any) {
     satZenOutline: Cesium.Color.CYAN.withAlpha(0.8),
     issOutline: Cesium.Color.fromCssColorString('#ffcc02').withAlpha(0.6),
     planetOutline: Cesium.Color.fromCssColorString('#ff8c69').withAlpha(0.6),
-    // Label eye offsets: push the zenith-sat label toward the camera so it
-    // doesn't z-fight / overlap its own dot.
+    // Label offsets: nudge the label off its dot and pull it toward the camera
+    // so it never z-fights the point primitive.
     eyeLabel: new Cesium.Cartesian3(0, 0, -10000),
     eyeZero: Cesium.Cartesian3.ZERO,
+    labelPixelOffset: new Cesium.Cartesian2(10, -10),
     // Subtle white edge so in-zenith points pop against the globe.
     zenOutline: Cesium.Color.WHITE.withAlpha(0.85),
     // Zenith cone.
@@ -76,7 +65,7 @@ function getPointStyle(category: string, inZenithWindow: boolean): any {
       outlineColor: C!.issOutline,
       outlineWidth: 2,
       showLabel: true,
-      labelFont: '11px monospace',
+      labelFont: '11px Space Mono',
       labelFill: C!.issFill,
       eyeOffset: C!.eyeZero,
     }
@@ -134,15 +123,10 @@ async function getCesium() {
   return Cesium
 }
 
-interface EntityCacheEntry {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  posProp: any
-  inZenithWindow: boolean
-  tickCount: number
-}
-
 export default function CelestialGlobe() {
   const containerRef = useRef<HTMLDivElement>(null)
+  // Shared phase for the zenith cone's breathing pulse (driven by CallbackProperty).
+  const conePulseRef = useRef<{ phase: number }>({ phase: 0 })
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -151,11 +135,26 @@ export default function CelestialGlobe() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let viewer: any = null
     let cancelled = false
-    const entityCache = new Map<string, EntityCacheEntry>()
-    const pointCache = new Map<string, any>()
-    let pointCollection: any = null
     // rAF handle so we never queue more than one sync per frame.
     let pendingSyncRaf = 0
+
+    // Batched render primitives (created once after viewer init). One collection
+    // each for all points / labels / trails instead of ~750 individual entities.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let pointCollection: any = null
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let labelCollection: any = null
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let trailCollection: any = null
+    // Per-object primitive handles + trail position history.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pointCache = new Map<string, any>()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const labelCache = new Map<string, any>()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const trailCache = new Map<string, any>()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const trailHistory = new Map<string, any[]>()
 
     getCesium().then(async (Cesium) => {
       if (cancelled || !containerRef.current) return
@@ -195,8 +194,15 @@ export default function CelestialGlobe() {
         viewer.scene.debugShowFramesPerSecond = true
       }
 
-      viewer.clock.shouldAnimate = true
-      viewer.clock.multiplier = 1.0
+      // Positions are written manually each 10 s tick, so Cesium's clock never
+      // needs to advance — stop it to avoid per-frame property re-evaluation.
+      viewer.clock.shouldAnimate = false
+
+      // Render on demand: the scene only redraws when something actually changes
+      // (camera move, tile load, or our explicit requestRender after a data tick)
+      // instead of running a continuous 60 fps loop.
+      viewer.scene.requestRenderMode = true
+      viewer.scene.maximumRenderTimeChange = Infinity
 
       // ── Imagery ──────────────────────────────────────────────────────────────
       try {
@@ -248,21 +254,39 @@ export default function CelestialGlobe() {
         )
       } catch { /* Cesium < 1.100 */ }
 
+      // Distance fog softens the limb and adds depth toward the horizon.
+      viewer.scene.fog.enabled = true
+      viewer.scene.fog.density = 0.0002
+
       // ── Post-processing ───────────────────────────────────────────────────────
       // FXAA only — bloom over 10 k glowing dots costs ~15 ms/frame on a mid-range GPU.
       try { viewer.scene.postProcessStages.fxaa.enabled = true } catch { /* ignore */ }
       // Bloom is intentionally disabled for performance.
       try { viewer.scene.postProcessStages.bloom.enabled = false } catch { /* ignore */ }
 
-      // ── Camera ───────────────────────────────────────────────────────────────
+      // ── Camera intro ───────────────────────────────────────────────────────────
+      // Start from a high orbit looking straight down…
       viewer.camera.setView({
-        destination: Cesium.Cartesian3.fromDegrees(HOME_VIEW_LON, HOME_VIEW_LAT, HOME_VIEW_HEIGHT),
-        orientation: {
-          heading: Cesium.Math.toRadians(0),
-          pitch: Cesium.Math.toRadians(-90),
-          roll: 0,
-        },
+        destination: Cesium.Cartesian3.fromDegrees(80.2437, 12.9716, 15_000_000),
+        orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
       })
+
+      // …then fly down to the default observer (Chennai) for a cinematic intro.
+      // Small delay so Cesium finishes initial tile loading before the flight.
+      const introTimeout = setTimeout(() => {
+        if (cancelled || !viewer || viewer.isDestroyed()) return
+        viewer.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(80.2437, 12.9716, 2_500_000),
+          orientation: {
+            heading: Cesium.Math.toRadians(0),
+            pitch: Cesium.Math.toRadians(-45),
+            roll: 0,
+          },
+          duration: 3.5,
+          easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
+        })
+      }, 500)
+      unsubs.push(() => clearTimeout(introTimeout))
 
       // ── Entity selection ──────────────────────────────────────────────────────
       // Click a tracked object → open its detail panel via the store. Clicking
@@ -273,21 +297,16 @@ export default function CelestialGlobe() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (movement: any) => {
           const picked = viewer.scene.pick(movement.position)
-          const id: unknown = picked?.id?.id || picked?.id
-          const { objects, setSelectedObjectId, setTrackingObjectId, trackingObjectId } = useZenithStore.getState()
-          if (typeof id === 'string' && objects.has(id)) {
-            const obj = objects.get(id)!
-            // Satellites and ISS toggle into 3D tracking mode; planets only select
-            if (obj.category === 'satellite' || obj.category === 'iss') {
-              setTrackingObjectId(trackingObjectId === id ? null : id)
-            } else {
-              setTrackingObjectId(null)
-            }
-            setSelectedObjectId(id)
-          } else {
-            setTrackingObjectId(null)
-            setSelectedObjectId(null)
-          }
+          // PointPrimitives/Labels carry our object id directly in `.id` (a
+          // string); remaining Entities (cone, observer) expose it as `.id.id`.
+          let id: unknown = picked?.id
+          if (id && typeof id === 'object') id = (id as { id?: unknown }).id
+          const objects = useZenithStore.getState().objects
+          useZenithStore
+            .getState()
+            .setSelectedObjectId(
+              typeof id === 'string' && objects.has(id) ? id : null
+            )
         },
         Cesium.ScreenSpaceEventType.LEFT_CLICK
       )
@@ -314,6 +333,22 @@ export default function CelestialGlobe() {
         const orientation = Cesium.Transforms.headingPitchRollQuaternion(
           surface, new Cesium.HeadingPitchRoll(0, 0, 0)
         )
+        // Breathing pulse: fill alpha oscillates ~0.03→0.17, outline ~0.1→0.7.
+        // Only the fill callback advances the shared phase so both stay in sync.
+        const coneMaterial = new Cesium.ColorMaterialProperty(
+          new Cesium.CallbackProperty(() => {
+            conePulseRef.current.phase += 0.03
+            const alpha = 0.10 + Math.sin(conePulseRef.current.phase) * 0.07
+            return Cesium.Color.fromCssColorString('#4fc3f7').withAlpha(alpha)
+          }, false)
+        )
+        // CylinderGraphics.outlineColor takes a Property<Color> directly (there is
+        // no outlineMaterial), so the outline pulse is a CallbackProperty<Color>.
+        const coneOutlineColor = new Cesium.CallbackProperty(() => {
+          const alpha = 0.4 + Math.sin(conePulseRef.current.phase) * 0.3
+          return Cesium.Color.fromCssColorString('#4fc3f7').withAlpha(alpha)
+        }, false)
+
         viewer.entities.add({
           id: 'zenith-cone',
           show: showCone,
@@ -323,12 +358,13 @@ export default function CelestialGlobe() {
             length: CONE_LENGTH,
             topRadius: CONE_RADIUS, // wide end — up in the sky
             bottomRadius: 0, // apex — at the observer
-            material: new Cesium.ColorMaterialProperty(C!.coneBody),
+            material: coneMaterial,
             outline: true,
-            outlineColor: C!.coneOutline,
+            outlineColor: coneOutlineColor,
             outlineWidth: 2,
           },
         })
+        viewer.scene.requestRender()
       }
 
       // ── Observer marker ───────────────────────────────────────────────────────
@@ -362,6 +398,7 @@ export default function CelestialGlobe() {
             outlineWidth: 2,
           },
         })
+        viewer.scene.requestRender()
       }
 
       renderZenithCone()
@@ -373,6 +410,7 @@ export default function CelestialGlobe() {
         (show) => {
           const cone = viewer.entities.getById('zenith-cone')
           if (cone) cone.show = show
+          viewer.scene.requestRender()
         }
       )
       unsubs.push(unsubCone)
@@ -380,68 +418,97 @@ export default function CelestialGlobe() {
       // Rebuild observer-anchored entities (cone + marker) when the observer moves.
       const unsubObserver = useZenithStore.subscribe(
         (s) => s.observer,
-        () => {
+        (observer) => {
           renderZenithCone()
           renderObserverMarker()
+          // Cinematic fly-to the new observer — fires for city search,
+          // geolocation, and manual coords (all route through setObserver).
+          viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(
+              observer.longitude,
+              observer.latitude,
+              2_500_000 // 2500 km — see the city, still see the cone
+            ),
+            orientation: {
+              heading: Cesium.Math.toRadians(0),
+              pitch: Cesium.Math.toRadians(-45),
+              roll: 0,
+            },
+            duration: 2.5,
+            easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
+          })
+          viewer.scene.requestRender()
         }
       )
       unsubs.push(unsubObserver)
 
-      // Scratch JulianDate reused across ticks — addSample copies before we mutate it again.
-      const scratchT1 = new Cesium.JulianDate()
+      // CallbackProperty materials don't self-trigger renders under
+      // requestRenderMode, so pump a lightweight 20 fps render request to keep the
+      // cone's breathing pulse smooth while the rest stays render-on-demand.
+      const pulseInterval = setInterval(() => {
+        if (viewer && !viewer.isDestroyed()) viewer.scene.requestRender()
+      }, 50)
+      unsubs.push(() => clearInterval(pulseInterval))
 
-      // ── Orbital trail helpers ──────────────────────────────────────────────────
-      // Drops the `trail-${id}` polyline and its ring buffer for a given object.
+      // ── Batched render primitives ──────────────────────────────────────────────
+      // One PointPrimitiveCollection / LabelCollection / PolylineCollection holds
+      // every marker, so the whole catalogue draws in a handful of GPU calls.
+      pointCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection())
+      labelCollection = viewer.scene.primitives.add(new Cesium.LabelCollection())
+      trailCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection())
+
+      // ── Per-object teardown ─────────────────────────────────────────────────────
       const removeTrail = (id: string) => {
-        if (trailBuffers.delete(id)) viewer.entities.removeById(`trail-${id}`)
+        const trail = trailCache.get(id)
+        if (trail) { trailCollection.remove(trail); trailCache.delete(id) }
+        trailHistory.delete(id)
+      }
+      const removeObject = (id: string) => {
+        const point = pointCache.get(id)
+        if (point) { pointCollection.remove(point); pointCache.delete(id) }
+        const label = labelCache.get(id)
+        if (label) { labelCollection.remove(label); labelCache.delete(id) }
+        removeTrail(id)
       }
 
-      // Pushes the object's current geo position into its ring buffer and
-      // creates/updates the glow polyline behind it. ISS glows gold, zenith
-      // satellites glow cyan.
-      const updateTrail = (obj: CelestialObject) => {
-        let buf = trailBuffers.get(obj.id)
-        if (!buf) { buf = []; trailBuffers.set(obj.id, buf) }
-        buf.push(obj.geo)
-        if (buf.length > TRAIL_LENGTH) buf.shift()
+      // Push the current position into the object's ring buffer (cap TRAIL_LENGTH)
+      // and create/update its glow polyline. ISS glows gold, zenith sats cyan.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const updateTrail = (obj: CelestialObject, position: any) => {
+        let hist = trailHistory.get(obj.id)
+        if (!hist) { hist = []; trailHistory.set(obj.id, hist) }
+        hist.push(position)
+        if (hist.length > TRAIL_LENGTH) hist.shift()
+        if (hist.length < 2) return // need two points to draw a line
 
-        const positions = buf.map((g) =>
-          Cesium.Cartesian3.fromDegrees(g.longitude, g.latitude, g.heightKm * 1000)
-        )
-        const trailId = `trail-${obj.id}`
-        const existing = viewer.entities.getById(trailId)
+        const positions = hist.slice()
+        const existing = trailCache.get(obj.id)
         if (existing) {
-          existing.polyline.positions = positions
+          existing.positions = positions
         } else {
-          const material = obj.category === 'iss'
-            ? new Cesium.PolylineGlowMaterialProperty({
-              glowPower: 0.2,
-              color: Cesium.Color.fromCssColorString('#ffcc02').withAlpha(0.5),
-            })
-            : new Cesium.PolylineGlowMaterialProperty({
-              glowPower: 0.1,
-              color: Cesium.Color.CYAN.withAlpha(0.3),
-            })
-          viewer.entities.add({
-            id: trailId,
-            polyline: { positions, material, width: 1.5, clampToGround: false },
+          const trail = trailCollection.add({
+            positions,
+            width: 1.5,
+            material: Cesium.Material.fromType('Color', {
+              color: obj.category === 'iss'
+                ? Cesium.Color.fromCssColorString('#ffcc02').withAlpha(0.4)
+                : Cesium.Color.CYAN.withAlpha(0.25),
+            }),
           })
+          trailCache.set(obj.id, trail)
         }
       }
 
-      // ── Delta satellite entity sync ───────────────────────────────────────────
-      // Deferred to the next animation frame so the Zustand notify → syncObjectMarkers
-      // path never blocks the render thread mid-frame.
+      // ── Batched marker sync ─────────────────────────────────────────────────────
+      // Static positions written once per data tick (no SampledPositionProperty),
+      // so Cesium does zero per-frame interpolation. One pass updates points,
+      // labels (zenith/ISS/planet only), and trails.
       const syncObjectMarkers = (objects: Map<string, CelestialObject>) => {
         if (!viewer || viewer.isDestroyed()) return
 
-        // 1. Remove stale entities from entities and pointCollection
-        for (const id of entityCache.keys()) {
-          if (!objects.has(id)) {
-            viewer.entities.removeById(id)
-            entityCache.delete(id)
-            removeTrail(id)
-          }
+        // Remove primitives for objects that dropped out of the store.
+        for (const id of pointCache.keys()) {
+          if (!objects.has(id)) removeObject(id)
         }
         for (const [id, pt] of pointCache.entries()) {
           if (!objects.has(id)) {
@@ -450,178 +517,72 @@ export default function CelestialGlobe() {
           }
         }
 
-        const nowDate = new Date()
-        const t0 = Cesium.JulianDate.fromDate(nowDate)
-
-        const selectedId = useZenithStore.getState().selectedObjectId
-        const trackingId = useZenithStore.getState().trackingObjectId
-
         for (const obj of objects.values()) {
-          // Solar-system bodies (Sun + planets) are drawn by the solar-system module
-          // at their orbital scene positions, not from geo — skip them entirely here.
-          if (obj.solarBody) continue
+          const position = Cesium.Cartesian3.fromDegrees(
+            obj.geo.longitude, obj.geo.latitude, obj.geo.heightKm * 1000
+          )
+          const style = getPointStyle(obj.category, obj.inZenithWindow)
 
-          const isActive = obj.category === 'planet' || obj.category === 'iss' || obj.inZenithWindow || obj.id === selectedId || obj.id === trackingId
+          // ── Point ──
+          const point = pointCache.get(obj.id)
+          if (point) {
+            point.position = position
+            point.color = style.color
+            point.pixelSize = style.pixelSize
+            point.outlineColor = style.outlineColor
+            point.outlineWidth = style.outlineWidth
+          } else {
+            pointCache.set(obj.id, pointCollection.add({
+              id: obj.id,
+              position,
+              color: style.color,
+              pixelSize: style.pixelSize,
+              outlineColor: style.outlineColor,
+              outlineWidth: style.outlineWidth,
+            }))
+          }
 
-          if (isActive) {
-            // Highlighted zenith objects, ISS, and planets use the full Entity API
-            // so they retain labels, trails, cylinders, and sub-second interpolation.
-            
-            // If the object was previously a background point primitive, remove it.
-            if (pointCache.has(obj.id)) {
-              const pt = pointCache.get(obj.id)
-              pointCollection.remove(pt)
-              pointCache.delete(obj.id)
-            }
-
-            const pos0 = Cesium.Cartesian3.fromDegrees(
-              obj.geo.longitude, obj.geo.latitude, obj.geo.heightKm * 1000
-            )
-
-            if (entityCache.has(obj.id)) {
-              const cache = entityCache.get(obj.id)!
-              cache.tickCount++
-
-              let posProp = cache.posProp
-              // Recycle SampledPositionProperty every N ticks to bound memory.
-              if (cache.tickCount % MAX_SAMPLES_PER_TICK === 0 && obj.id !== trackingId) {
-                posProp = new Cesium.SampledPositionProperty()
-                posProp.setInterpolationOptions({
-                  interpolationDegree: 1,
-                  interpolationAlgorithm: Cesium.LinearApproximation,
-                })
-                posProp.forwardExtrapolationType = Cesium.ExtrapolationType.HOLD
-                posProp.backwardExtrapolationType = Cesium.ExtrapolationType.HOLD
-                const entity = viewer.entities.getById(obj.id)
-                if (entity) entity.position = posProp
-                cache.posProp = posProp
-              }
-
-              posProp.addSample(t0, pos0)
-
-              if (obj.geoNext) {
-                const intervalSec = (obj.updatedAt
-                  ? new Date(obj.updatedAt + 10_000).getTime() - nowDate.getTime()
-                  : 10_000) / 1000
-                // scratchT1 is mutated in place; addSample copies it before we reuse it.
-                Cesium.JulianDate.addSeconds(t0, intervalSec, scratchT1)
-                posProp.addSample(
-                  scratchT1,
-                  Cesium.Cartesian3.fromDegrees(
-                    obj.geoNext.longitude, obj.geoNext.latitude, obj.geoNext.heightKm * 1000
-                  )
-                )
-              }
-
-              if (cache.inZenithWindow !== obj.inZenithWindow) {
-                cache.inZenithWindow = obj.inZenithWindow
-                const entity = viewer.entities.getById(obj.id)
-                if (entity?.point) {
-                  const style = getPointStyle(obj.category, obj.inZenithWindow)
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    ; (entity.point.pixelSize as any).setValue(style.pixelSize)
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    ; (entity.point.outlineWidth as any).setValue(style.outlineWidth)
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    ; (entity.point.color as any).setValue(style.color)
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    ; (entity.point.outlineColor as any).setValue(style.outlineColor)
-                }
-                if (entity?.label) {
-                  const style = getPointStyle(obj.category, obj.inZenithWindow)
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  ; (entity.label.show as any).setValue(style.showLabel)
-                }
-              }
+          // ── Label (zenith / ISS / planet only — ~740 sat labels eliminated) ──
+          const needsLabel =
+            obj.inZenithWindow || obj.category === 'iss' || obj.category === 'planet'
+          if (needsLabel) {
+            const fill = obj.category === 'iss' ? C!.issFill
+              : obj.category === 'planet' ? C!.planetFill
+                : C!.cyan
+            const label = labelCache.get(obj.id)
+            if (label) {
+              label.position = position
+              label.text = obj.name
+              label.fillColor = fill
             } else {
-              const posProp = new Cesium.SampledPositionProperty()
-              posProp.setInterpolationOptions({
-                interpolationDegree: 1,
-                interpolationAlgorithm: Cesium.LinearApproximation,
-              })
-              posProp.forwardExtrapolationType = Cesium.ExtrapolationType.HOLD
-              posProp.backwardExtrapolationType = Cesium.ExtrapolationType.HOLD
-              posProp.addSample(t0, pos0)
-
-              if (obj.geoNext) {
-                Cesium.JulianDate.addSeconds(t0, 10, scratchT1)
-                posProp.addSample(
-                  scratchT1,
-                  Cesium.Cartesian3.fromDegrees(
-                    obj.geoNext.longitude, obj.geoNext.latitude, obj.geoNext.heightKm * 1000
-                  )
-                )
-              }
-
-              const style = getPointStyle(obj.category, obj.inZenithWindow)
-              viewer.entities.add({
+              labelCache.set(obj.id, labelCollection.add({
                 id: obj.id,
-                name: obj.name,
-                position: posProp,
-                point: {
-                  pixelSize: style.pixelSize,
-                  color: style.color,
-                  outlineColor: style.outlineColor,
-                  outlineWidth: style.outlineWidth,
-                },
-                label: {
-                  text: obj.name,
-                  show: style.showLabel,
-                  font: style.labelFont,
-                  fillColor: style.labelFill,
-                  outlineColor: C!.labelOutline,
-                  outlineWidth: 2,
-                  style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                  verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                  pixelOffset: new Cesium.Cartesian2(0, -10),
-                  eyeOffset: style.eyeOffset,
-                },
-              })
-
-              entityCache.set(obj.id, { posProp, inZenithWindow: obj.inZenithWindow, tickCount: 0 })
-            }
-
-            // Keep entity invisible while replaced by 3D tracking box
-            const entityForShow = viewer.entities.getById(obj.id)
-            if (entityForShow) entityForShow.show = obj.id !== trackingId
-
-            // Orbital trail: zenith objects + the ISS get one; planets never do.
-            if (obj.category !== 'planet' && (obj.inZenithWindow || obj.category === 'iss')) {
-              updateTrail(obj)
-            } else {
-              removeTrail(obj.id)
+                position,
+                text: obj.name,
+                font: '11px Space Mono, monospace',
+                fillColor: fill,
+                outlineColor: C!.labelOutline,
+                outlineWidth: 1,
+                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                pixelOffset: C!.labelPixelOffset,
+                eyeOffset: C!.eyeLabel,
+              }))
             }
           } else {
-            // Background swarm (non-zenith satellites) are rendered as simple, lightweight
-            // point primitives in a GPU PointPrimitiveCollection to optimize performance.
-            
-            // If the object was previously a full Entity, remove it.
-            if (entityCache.has(obj.id)) {
-              viewer.entities.removeById(obj.id)
-              entityCache.delete(obj.id)
-              removeTrail(obj.id)
-            }
+            const label = labelCache.get(obj.id)
+            if (label) { labelCollection.remove(label); labelCache.delete(obj.id) }
+          }
 
-            const pos = Cesium.Cartesian3.fromDegrees(
-              obj.geo.longitude, obj.geo.latitude, obj.geo.heightKm * 1000
-            )
-
-            if (pointCache.has(obj.id)) {
-              const pt = pointCache.get(obj.id)
-              pt.position = pos
-              pt.show = obj.id !== trackingId
-            } else {
-              const pt = pointCollection.add({
-                position: pos,
-                pixelSize: 2,
-                color: C!.cyanFaint,
-                show: obj.id !== trackingId,
-                id: obj.id, // Set primitive ID to satellite ID so screen picker selects it on click
-              })
-              pointCache.set(obj.id, pt)
-            }
+          // ── Trail (zenith + ISS, never planets) ──
+          if ((obj.inZenithWindow || obj.category === 'iss') && obj.category !== 'planet') {
+            updateTrail(obj, position)
+          } else {
+            removeTrail(obj.id)
           }
         }
+
+        // Render-on-demand: redraw once now that the scene has changed.
+        viewer.scene.requestRender()
       }
 
       // Initial sync runs immediately (no RAF — viewer just initialised, nothing to block).
@@ -772,10 +733,16 @@ export default function CelestialGlobe() {
       cancelled = true
       if (pendingSyncRaf) { cancelAnimationFrame(pendingSyncRaf); pendingSyncRaf = 0 }
       unsubs.forEach((u) => u())
-      entityCache.clear()
       pointCache.clear()
-      trailBuffers.clear()
-      if (viewer && !viewer.isDestroyed()) viewer.destroy()
+      labelCache.clear()
+      trailCache.clear()
+      trailHistory.clear()
+      if (viewer && !viewer.isDestroyed()) {
+        if (pointCollection) viewer.scene.primitives.remove(pointCollection)
+        if (labelCollection) viewer.scene.primitives.remove(labelCollection)
+        if (trailCollection) viewer.scene.primitives.remove(trailCollection)
+        viewer.destroy()
+      }
     }
   }, [])
 

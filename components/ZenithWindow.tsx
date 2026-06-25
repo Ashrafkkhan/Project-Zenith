@@ -32,34 +32,39 @@ function ZenithScoreWidget() {
       style={{ filter: 'drop-shadow(0 0 12px rgba(6,182,212,0.4))' }}
     >
       <div className="flex items-center gap-4">
-        <svg viewBox="0 0 100 100" width={80} height={80} className="shrink-0">
-          {/* Background ring */}
-          <circle cx={50} cy={50} r={40} fill="none" stroke="#0e2a35" strokeWidth={8} />
-          {/* Score arc */}
-          <circle
-            cx={50}
-            cy={50}
-            r={40}
-            fill="none"
-            stroke="#06b6d4"
-            strokeWidth={8}
-            strokeDasharray={`${(score / 100) * 251.2} 251.2`}
-            strokeLinecap="round"
-            transform="rotate(-90 50 50)"
-            style={{ transition: 'stroke-dasharray 1s ease-out' }}
-          />
-          <text
-            x={50}
-            y={54}
-            textAnchor="middle"
-            fill="white"
-            fontSize={22}
-            fontWeight="bold"
-            fontFamily="monospace"
-          >
-            {score}
-          </text>
-        </svg>
+        <div className="flex flex-col items-center shrink-0">
+          <svg viewBox="0 0 100 100" width={80} height={80}>
+            {/* Background ring */}
+            <circle cx={50} cy={50} r={40} fill="none" stroke="#0e2a35" strokeWidth={8} />
+            {/* Score arc */}
+            <circle
+              cx={50}
+              cy={50}
+              r={40}
+              fill="none"
+              stroke="#06b6d4"
+              strokeWidth={8}
+              strokeDasharray={`${(score / 100) * 251.2} 251.2`}
+              strokeLinecap="round"
+              transform="rotate(-90 50 50)"
+              style={{ transition: 'stroke-dasharray 1s ease-out' }}
+            />
+            <text
+              x={50}
+              y={54}
+              textAnchor="middle"
+              fill="white"
+              fontSize={22}
+              fontWeight="bold"
+              fontFamily="monospace"
+            >
+              {score}
+            </text>
+          </svg>
+          <span className="text-[10px] text-cyan-400 font-mono tracking-widest mt-1">
+            ZENITH SCORE
+          </span>
+        </div>
 
         {/* Animated waveform */}
         <div className="flex items-end gap-[2px] h-[18px] flex-1">
